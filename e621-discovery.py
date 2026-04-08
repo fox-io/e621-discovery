@@ -1,16 +1,3 @@
-# This script will be used to discover new artists to follow from e621.net.
-# It will use the e621 API to search for new posts using https://e621.net/posts
-# The images will be presented in order, one at a time. Displayed alongside the image will be 3 buttons:
-# Follow, Ignore, and Skip.
-# The user can then choose to follow the artist or not. If skip is pressed, the artist will be shown again when
-# an image from that artist appears again, but the skipped image will not be shown again.
-# If they choose to follow, the artist's name will be added to a list of followed artists. If they choose not to follow,
-# the artist's name will be added to a list of ignored artists.
-# The script will prevent showing ignored artists again and in future.
-# Artists, once followed, will also no longer be shown again and in future.
-# The list of followed artists should be saved as a JSON file.
-# The list of ignored artists should also be saved as a different JSON file.
-# The script will also have a search function that allows the user to search for specific tags or artists and display the results in the same way as the discovery function.
 import requests
 import json
 import os
