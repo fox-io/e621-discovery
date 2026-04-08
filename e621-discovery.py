@@ -82,7 +82,7 @@ def display_post(post, followed_artists, ignored_artists):
             return
         # Scale image to fit within a reasonable window size
         max_size = (800, 800)
-        img.thumbnail(max_size, Image.LANCZOS)
+        img.thumbnail(max_size, Image.Resampling.LANCZOS)
         root = tk.Tk()
         root.title("e621 Discovery")
         root.geometry("+0+0")
