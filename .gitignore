@@ -1,1 +1,5 @@
 .DS_Store
+followed_artists.json
+.gitignore
+ignored_artists.json
+AGENTS.md
