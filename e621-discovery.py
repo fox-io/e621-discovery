@@ -6,6 +6,7 @@ import sys
 import logging
 import atexit
 import threading
+import json
 from datetime import datetime, timezone
 from PIL import Image
 from io import BytesIO
@@ -22,8 +23,17 @@ log = logging.getLogger(__name__)
 
 # Constants
 API_URL = "https://e621.net/posts.json"
+_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+try:
+    with open(_config_path) as _f:
+        _config = json.load(_f)
+except FileNotFoundError:
+    raise SystemExit("config.json not found. Copy config.json.example to config.json and fill in your e621 username.")
+_e621_username = _config.get("e621_username", "")
+if not _e621_username or _e621_username == "<your_username>":
+    raise SystemExit("Set e621_username in config.json before running.")
 HEADERS = {
-    "User-Agent": "e621 Discovery Script by YourUsername"
+    "User-Agent": f"e621 Discovery Script by {_e621_username}"
 }
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
 
