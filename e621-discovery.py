@@ -152,21 +152,26 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
                 root.destroy()
                 return
 
+            tags = query.split()
             try:
                 tag_url = "https://e621.net/tags.json"
-                params = {"search[name_matches]": query}
-                resp = requests.get(tag_url, headers=HEADERS, params=params)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if not data:
-                        messagebox.showinfo("Search Result", f"No tags found matching '{query}'.")
+                invalid_tags = []
+                for tag in tags:
+                    params = {"search[name]": tag.lstrip("-")}
+                    resp = requests.get(tag_url, headers=HEADERS, params=params)
+                    if resp.status_code == 200:
+                        if not resp.json():
+                            invalid_tags.append(tag)
                     else:
-                        result_dict["action"] = "search"
-                        result_dict["tags"] = query
-                        result_dict["random_order"] = random_var.get()
-                        root.destroy()
+                        messagebox.showerror("API Error", f"Error searching tags: {resp.status_code}")
+                        return
+                if invalid_tags:
+                    messagebox.showinfo("Search Result", f"No tags found matching: {', '.join(invalid_tags)}")
                 else:
-                    messagebox.showerror("API Error", f"Error searching tags: {resp.status_code}")
+                    result_dict["action"] = "search"
+                    result_dict["tags"] = " ".join(tags)
+                    result_dict["random_order"] = random_var.get()
+                    root.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to connect: {e}")
 
