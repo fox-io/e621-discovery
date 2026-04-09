@@ -326,7 +326,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                                 tk_thumb = ImageTk.PhotoImage(t)
                                 thumb_labels[i].config(image=tk_thumb, text="")
                                 thumb_labels[i].image = tk_thumb
-                        thumb_images.append(tk_thumb)
+                                thumb_images.append(tk_thumb)
                             except tk.TclError:
                                 pass
                         root.after(0, apply)
