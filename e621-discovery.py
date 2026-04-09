@@ -194,6 +194,18 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
         tk.Button(action_frame, text="❤️", command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
         tk.Button(action_frame, text="🚫", command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
         tk.Button(action_frame, text="⏭️", command=skip_artist).pack(side="left")
+        # Tag listbox
+        tk.Label(btn_frame, text="Post Tags").pack(anchor="w", pady=(6, 0))
+        all_tags = sorted(tag for tags in post.get("tags", {}).values() for tag in tags)
+        tag_list_frame = tk.Frame(btn_frame)
+        tag_list_frame.pack(anchor="w", pady=(6, 0))
+        tag_scrollbar = tk.Scrollbar(tag_list_frame, orient="vertical")
+        tag_listbox = tk.Listbox(tag_list_frame, height=10, width=22, yscrollcommand=tag_scrollbar.set, activestyle="none")
+        tag_scrollbar.config(command=tag_listbox.yview)
+        tag_listbox.pack(side="left", fill="both")
+        tag_scrollbar.pack(side="left", fill="y")
+        for tag in all_tags:
+            tag_listbox.insert(tk.END, tag)
         tk.Frame(btn_frame, height=10).pack()
         tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
         # Right column: image
