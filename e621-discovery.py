@@ -81,6 +81,23 @@ def add_ignored_artist(artist):
     conn.commit()
     conn.close()
     log.info("DB write: added '%s' to ignored_artists", artist)
+
+def add_banned_tag(tag):
+    """Insert a tag into the banned_tags table."""
+    conn = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
+    conn.commit()
+    conn.close()
+    log.info("DB write: added '%s' to banned_tags", tag)
+
+def load_banned_tags():
+    """Load banned tags list from the database."""
+    conn = get_db()
+    tags = [row[0] for row in conn.execute("SELECT tag FROM banned_tags").fetchall()]
+    conn.close()
+    log.info("Loaded %d banned tags", len(tags))
+    return tags
 # Fetch posts from e621 API
 def fetch_posts(tags="", page=1, random_order=True):
     time.sleep(1) # Respect e621 rate limit of 1 request per second
@@ -102,7 +119,7 @@ def fetch_posts(tags="", page=1, random_order=True):
         log.error("Error fetching posts: HTTP %d", response.status_code)
         return []
 # Display post and handle user interaction
-def display_post(post, followed_artists, ignored_artists, current_tags="", random_order=True):
+def display_post(post, followed_artists, ignored_artists, banned_tags, current_tags="", random_order=True):
     result_dict = {}
     artist_list = post.get("tags", {}).get("artist", [])
     artist = artist_list[0] if artist_list else "Unknown"
@@ -111,6 +128,11 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
         return
     if artist in ignored_artists:
         log.info("Skipping post %s — artist '%s' is already ignored", post.get("id", "?"), artist)
+        return
+    post_tag_set = {t for tags in post.get("tags", {}).values() for t in tags}
+    hit = post_tag_set & set(banned_tags)
+    if hit:
+        log.info("Skipping post %s — contains banned tag(s): %s", post.get("id", "?"), ", ".join(hit))
         return
     file_info = post.get("file", {})
     image_url = file_info.get("url")
@@ -203,14 +225,45 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
         tk.Label(btn_frame, text="Post Tags").pack(anchor="w", pady=(6, 0))
         all_tags = sorted(tag for tags in post.get("tags", {}).values() for tag in tags)
         tag_list_frame = tk.Frame(btn_frame)
-        tag_list_frame.pack(anchor="w", pady=(6, 0))
-        tag_scrollbar = tk.Scrollbar(tag_list_frame, orient="vertical")
-        tag_listbox = tk.Listbox(tag_list_frame, height=10, width=22, yscrollcommand=tag_scrollbar.set, activestyle="none")
-        tag_scrollbar.config(command=tag_listbox.yview)
-        tag_listbox.pack(side="left", fill="both")
+        tag_list_frame.pack(anchor="w")
+        tag_canvas = tk.Canvas(tag_list_frame, height=200, width=200, highlightthickness=0)
+        tag_scrollbar = tk.Scrollbar(tag_list_frame, orient="vertical", command=tag_canvas.yview)
+        tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
+        tag_canvas.pack(side="left", fill="both")
         tag_scrollbar.pack(side="left", fill="y")
+        tag_inner = tk.Frame(tag_canvas)
+        tag_canvas.create_window((0, 0), window=tag_inner, anchor="nw")
+        tag_inner.bind("<Configure>", lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all")))
+        def _on_mousewheel(event):
+            tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        tag_canvas.bind("<MouseWheel>", _on_mousewheel)
+        tag_inner.bind("<MouseWheel>", _on_mousewheel)
+        def ban_tag(tag):
+            add_banned_tag(tag)
+            if tag not in banned_tags:
+                banned_tags.append(tag)
+        def add_tag_to_search(tag):
+            existing = search_entry.get().strip().split()
+            if tag not in existing:
+                existing.append(tag)
+            search_entry.delete(0, tk.END)
+            search_entry.insert(0, " ".join(existing))
+            perform_search()
         for tag in all_tags:
-            tag_listbox.insert(tk.END, tag)
+            row = tk.Frame(tag_inner)
+            row.pack(fill="x", anchor="w")
+            plus_lbl = tk.Label(row, text="+", fg="green", cursor="pointinghand")
+            plus_lbl.pack(side="left", padx=(0, 2))
+            plus_lbl.bind("<Button-1>", lambda e, t=tag: add_tag_to_search(t))
+            plus_lbl.bind("<MouseWheel>", _on_mousewheel)
+            minus_lbl = tk.Label(row, text="-", fg="red", cursor="pointinghand")
+            minus_lbl.pack(side="left", padx=(0, 4))
+            minus_lbl.bind("<Button-1>", lambda e, t=tag: ban_tag(t))
+            minus_lbl.bind("<MouseWheel>", _on_mousewheel)
+            tag_lbl = tk.Label(row, text=tag, anchor="w")
+            tag_lbl.pack(side="left")
+            tag_lbl.bind("<MouseWheel>", _on_mousewheel)
+            row.bind("<MouseWheel>", _on_mousewheel)
         tk.Frame(btn_frame, height=10).pack()
         tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
         # Right column: image
@@ -242,6 +295,7 @@ def main():
     atexit.register(shutdown)
     init_db()
     followed_artists, ignored_artists = load_artists()
+    banned_tags = load_banned_tags()
     current_tags = ""
     random_order = True
     page = 1
@@ -252,7 +306,7 @@ def main():
             break
         search_triggered = False
         for post in posts:
-            res = display_post(post, followed_artists, ignored_artists, current_tags, random_order)
+            res = display_post(post, followed_artists, ignored_artists, banned_tags, current_tags, random_order)
             if res and res.get("action") == "search":
                 current_tags = res.get("tags", "")
                 random_order = res.get("random_order", random_order)
