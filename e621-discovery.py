@@ -282,7 +282,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
         thumb_frame = tk.Frame(root)
         thumb_frame.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
         tk.Label(thumb_frame, text="More by artist").pack(anchor="w", pady=(0, 4))
-        thumb_frame.images = []
+        thumb_images: list = []
         thumb_labels = []
         for _ in range(3):
             lbl = tk.Label(thumb_frame, text="…", fg="gray")
@@ -316,7 +316,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                                 tk_thumb = ImageTk.PhotoImage(t)
                                 thumb_labels[i].config(image=tk_thumb, text="")
                                 thumb_labels[i].image = tk_thumb
-                                thumb_frame.images.append(tk_thumb)
+                        thumb_images.append(tk_thumb)
                             except tk.TclError:
                                 pass
                         root.after(0, apply)
