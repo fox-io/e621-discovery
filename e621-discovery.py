@@ -82,11 +82,15 @@ def add_ignored_artist(artist):
     conn.close()
     log.info("DB write: added '%s' to ignored_artists", artist)
 # Fetch posts from e621 API
-def fetch_posts(tags="", page=1):
+def fetch_posts(tags="", page=1, random_order=True):
     time.sleep(1) # Respect e621 rate limit of 1 request per second
-    log.info("Fetching posts from API (tags=%r, page=%d)", tags, page)
+    if random_order:
+        combined_tags = ("order:random " + tags).strip() if tags else "order:random"
+    else:
+        combined_tags = tags
+    log.info("Fetching posts from API (tags=%r, page=%d, random=%s)", combined_tags, page, random_order)
     params = {
-        "tags": tags,
+        "tags": combined_tags,
         "page": page
     }
     response = requests.get(API_URL, headers=HEADERS, params=params)
@@ -98,7 +102,7 @@ def fetch_posts(tags="", page=1):
         log.error("Error fetching posts: HTTP %d", response.status_code)
         return []
 # Display post and handle user interaction
-def display_post(post, followed_artists, ignored_artists, current_tags=""):
+def display_post(post, followed_artists, ignored_artists, current_tags="", random_order=True):
     result_dict = {}
     artist_list = post.get("tags", {}).get("artist", [])
     artist = artist_list[0] if artist_list else "Unknown"
@@ -135,11 +139,16 @@ def display_post(post, followed_artists, ignored_artists, current_tags=""):
         # Left column: artist label and buttons
         btn_frame = tk.Frame(root)
         btn_frame.grid(row=0, column=0, sticky="nw", padx=10, pady=10)
+        # Random order checkbox (packed first so it appears at the top)
+        random_var = tk.BooleanVar(value=random_order)
+        random_cb = tk.Checkbutton(btn_frame, text="Random order", variable=random_var)
+        random_cb.pack(anchor="w", pady=(0, 5))
         def perform_search():
             query = search_entry.get().strip()
             if not query:
                 result_dict["action"] = "search"
                 result_dict["tags"] = ""
+                result_dict["random_order"] = random_var.get()
                 root.destroy()
                 return
 
@@ -154,6 +163,7 @@ def display_post(post, followed_artists, ignored_artists, current_tags=""):
                     else:
                         result_dict["action"] = "search"
                         result_dict["tags"] = query
+                        result_dict["random_order"] = random_var.get()
                         root.destroy()
                 else:
                     messagebox.showerror("API Error", f"Error searching tags: {resp.status_code}")
@@ -167,6 +177,13 @@ def display_post(post, followed_artists, ignored_artists, current_tags=""):
         search_entry.pack(side="left", padx=(0, 5))
         search_btn = tk.Button(search_frame, text="🔍", command=perform_search)
         search_btn.pack(side="left")
+        # Set checkbox command after search_entry exists so the toggle can read it
+        def on_random_toggle():
+            result_dict["action"] = "search"
+            result_dict["tags"] = search_entry.get().strip() or current_tags
+            result_dict["random_order"] = random_var.get()
+            root.destroy()
+        random_cb.config(command=on_random_toggle)
         tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
         tk.Button(btn_frame, text="Follow", width=10, command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
         tk.Button(btn_frame, text="Ignore", width=10, command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
@@ -205,17 +222,19 @@ def main():
     init_db()
     followed_artists, ignored_artists = load_artists()
     current_tags = ""
+    random_order = True
     page = 1
     while True:
-        posts = fetch_posts(tags=current_tags, page=page)
+        posts = fetch_posts(tags=current_tags, page=page, random_order=random_order)
         if not posts:
             log.info("No more posts available")
             break
         search_triggered = False
         for post in posts:
-            res = display_post(post, followed_artists, ignored_artists, current_tags)
+            res = display_post(post, followed_artists, ignored_artists, current_tags, random_order)
             if res and res.get("action") == "search":
                 current_tags = res.get("tags", "")
+                random_order = res.get("random_order", random_order)
                 page = 1
                 search_triggered = True
                 break
