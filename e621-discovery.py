@@ -76,6 +76,7 @@ def display_post(post, followed_artists, ignored_artists):
         root = tk.Tk()
         root.title("e621 Discovery")
         root.geometry("+0+0")
+        root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
         # Left column: artist label and buttons
         btn_frame = tk.Frame(root)
         btn_frame.grid(row=0, column=0, sticky="nw", padx=10, pady=10)
