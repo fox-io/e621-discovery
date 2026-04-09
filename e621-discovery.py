@@ -98,7 +98,7 @@ def fetch_posts(tags="", page=1):
         log.error("Error fetching posts: HTTP %d", response.status_code)
         return []
 # Display post and handle user interaction
-def display_post(post, followed_artists, ignored_artists):
+def display_post(post, followed_artists, ignored_artists, current_tags=""):
     result_dict = {}
     artist_list = post.get("tags", {}).get("artist", [])
     artist = artist_list[0] if artist_list else "Unknown"
@@ -163,13 +163,17 @@ def display_post(post, followed_artists, ignored_artists):
         search_frame = tk.Frame(btn_frame)
         search_frame.pack(anchor="w", pady=(0, 10))
         search_entry = tk.Entry(search_frame, width=15)
+        search_entry.insert(0, current_tags)
         search_entry.pack(side="left", padx=(0, 5))
         search_btn = tk.Button(search_frame, text="🔍", command=perform_search)
         search_btn.pack(side="left")
         tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
         tk.Button(btn_frame, text="Follow", width=10, command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
         tk.Button(btn_frame, text="Ignore", width=10, command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
-        tk.Button(btn_frame, text="Skip", width=10, command=root.destroy).pack(anchor="w", pady=2)
+        def skip_artist():
+            log.info("Skipped artist '%s' (post %s)", artist, post.get("id", "?"))
+            root.destroy()
+        tk.Button(btn_frame, text="Skip", width=10, command=skip_artist).pack(anchor="w", pady=2)
         tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
         # Right column: image
         tk_img = ImageTk.PhotoImage(img)
@@ -209,7 +213,7 @@ def main():
             break
         search_triggered = False
         for post in posts:
-            res = display_post(post, followed_artists, ignored_artists)
+            res = display_post(post, followed_artists, ignored_artists, current_tags)
             if res and res.get("action") == "search":
                 current_tags = res.get("tags", "")
                 page = 1
