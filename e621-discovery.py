@@ -174,6 +174,7 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
         search_frame.pack(anchor="w", pady=(0, 10))
         search_entry = tk.Entry(search_frame, width=15)
         search_entry.insert(0, current_tags)
+        search_entry.bind("<Return>", lambda e: perform_search())
         search_entry.pack(side="left", padx=(0, 5))
         search_btn = tk.Button(search_frame, text="🔍", command=perform_search)
         search_btn.pack(side="left")
