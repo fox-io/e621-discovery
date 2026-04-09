@@ -79,6 +79,37 @@ def display_post(post, followed_artists, ignored_artists):
         # Left column: artist label and buttons
         btn_frame = tk.Frame(root)
         btn_frame.grid(row=0, column=0, sticky="nw", padx=10, pady=10)
+        def perform_search():
+            query = search_entry.get().strip()
+            if not query:
+                result_dict["action"] = "search"
+                result_dict["tags"] = ""
+                root.destroy()
+                return
+
+            try:
+                tag_url = "https://e621.net/tags.json"
+                params = {"search[name_matches]": query}
+                resp = requests.get(tag_url, headers=HEADERS, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if not data:
+                        messagebox.showinfo("Search Result", f"No tags found matching '{query}'.")
+                    else:
+                        result_dict["action"] = "search"
+                        result_dict["tags"] = query
+                        root.destroy()
+                else:
+                    messagebox.showerror("API Error", f"Error searching tags: {resp.status_code}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to connect: {e}")
+
+        search_frame = tk.Frame(btn_frame)
+        search_frame.pack(anchor="w", pady=(0, 10))
+        search_entry = tk.Entry(search_frame, width=15)
+        search_entry.pack(side="left", padx=(0, 5))
+        search_btn = tk.Button(search_frame, text="🔍", command=perform_search)
+        search_btn.pack(side="left")
         tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
         tk.Button(btn_frame, text="Follow", width=10, command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
         tk.Button(btn_frame, text="Ignore", width=10, command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
@@ -110,15 +141,12 @@ def main():
     current_tags = ""
     page = 1
     while True:
-        posts = fetch_posts(page=page)
         posts = fetch_posts(tags=current_tags, page=page)
         if not posts:
             print("No more posts available.")
             break
         search_triggered = False
         for post in posts:
-            display_post(post, followed_artists, ignored_artists)
-        page += 1
             res = display_post(post, followed_artists, ignored_artists)
             if res and res.get("action") == "search":
                 current_tags = res.get("tags", "")
