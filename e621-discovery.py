@@ -1,58 +1,112 @@
 import requests
-import json
+import sqlite3
 import os
 import time
 import sys
+import logging
+import atexit
+from datetime import datetime, timezone
 from PIL import Image
 from io import BytesIO
 import tkinter as tk
 from tkinter import messagebox
 from PIL import ImageTk
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
 # Constants
 API_URL = "https://e621.net/posts.json"
 HEADERS = {
     "User-Agent": "e621 Discovery Script by YourUsername"
 }
-FOLLOWED_ARTISTS_FILE = "followed_artists.json"
-IGNORED_ARTISTS_FILE = "ignored_artists.json"
-# Load followed and ignored artists from JSON files
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
+
+def get_db():
+    """Return a connection to the SQLite database."""
+    log.debug("Opening database connection: %s", DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+def init_db():
+    """Ensure tables exist (idempotent)."""
+    log.info("Initializing database at %s", DB_PATH)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS followed_artists (
+        tag TEXT UNIQUE NOT NULL,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS ignored_artists (
+        tag TEXT UNIQUE NOT NULL,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS banned_tags (
+        tag TEXT UNIQUE NOT NULL,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+    )""")
+    conn.commit()
+    conn.close()
+    log.info("Database initialized successfully")
+
 def load_artists():
-    if os.path.exists(FOLLOWED_ARTISTS_FILE):
-        with open(FOLLOWED_ARTISTS_FILE, "r") as f:
-            followed_artists = json.load(f)
-    else:
-        followed_artists = []
-    if os.path.exists(IGNORED_ARTISTS_FILE):
-        with open(IGNORED_ARTISTS_FILE, "r") as f:
-            ignored_artists = json.load(f)
-    else:
-        ignored_artists = []
-    return followed_artists, ignored_artists
-# Save followed and ignored artists to JSON files
-def save_artists(followed_artists, ignored_artists):
-    with open(FOLLOWED_ARTISTS_FILE, "w") as f:
-        json.dump(followed_artists, f)
-    with open(IGNORED_ARTISTS_FILE, "w") as f:
-        json.dump(ignored_artists, f)
+    """Load followed and ignored artist lists from the database."""
+    log.info("Loading artists from database")
+    conn = get_db()
+    followed = [row[0] for row in conn.execute("SELECT tag FROM followed_artists").fetchall()]
+    ignored = [row[0] for row in conn.execute("SELECT tag FROM ignored_artists").fetchall()]
+    conn.close()
+    log.info("Loaded %d followed and %d ignored artists", len(followed), len(ignored))
+    return followed, ignored
+
+def add_followed_artist(artist):
+    """Insert an artist into the followed_artists table."""
+    conn = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
+    conn.commit()
+    conn.close()
+    log.info("DB write: added '%s' to followed_artists", artist)
+
+def add_ignored_artist(artist):
+    """Insert an artist into the ignored_artists table."""
+    conn = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
+    conn.commit()
+    conn.close()
+    log.info("DB write: added '%s' to ignored_artists", artist)
 # Fetch posts from e621 API
 def fetch_posts(tags="", page=1):
     time.sleep(1) # Respect e621 rate limit of 1 request per second
+    log.info("Fetching posts from API (tags=%r, page=%d)", tags, page)
     params = {
         "tags": tags,
         "page": page
     }
     response = requests.get(API_URL, headers=HEADERS, params=params)
     if response.status_code == 200:
-        return response.json().get("posts", [])
+        posts = response.json().get("posts", [])
+        log.info("Received %d posts", len(posts))
+        return posts
     else:
-        print(f"Error fetching posts: {response.status_code}")
+        log.error("Error fetching posts: HTTP %d", response.status_code)
         return []
 # Display post and handle user interaction
 def display_post(post, followed_artists, ignored_artists):
     result_dict = {}
     artist_list = post.get("tags", {}).get("artist", [])
     artist = artist_list[0] if artist_list else "Unknown"
-    if artist in followed_artists or artist in ignored_artists:
+    if artist in followed_artists:
+        log.info("Skipping post %s — artist '%s' is already followed", post.get("id", "?"), artist)
+        return
+    if artist in ignored_artists:
+        log.info("Skipping post %s — artist '%s' is already ignored", post.get("id", "?"), artist)
         return
     file_info = post.get("file", {})
     image_url = file_info.get("url")
@@ -62,13 +116,14 @@ def display_post(post, followed_artists, ignored_artists):
     # Skip non-image file types (videos, flash, etc.)
     if file_ext not in ("jpg", "jpeg", "png", "gif", "bmp", "webp"):
         return
+    log.info("Downloading image for post %s from %s", post.get("id", "?"), image_url)
     response = requests.get(image_url)
     if response.status_code == 200:
         img_data = response.content
         try:
             img = Image.open(BytesIO(img_data))
         except Exception:
-            print(f"Skipping post: could not decode image from {image_url}")
+            log.warning("Skipping post: could not decode image from %s", image_url)
             return
         # Scale image to fit within a reasonable window size
         max_size = (800, 800)
@@ -123,28 +178,34 @@ def display_post(post, followed_artists, ignored_artists):
         root.mainloop()
         return result_dict
     else:
-        print(f"Error fetching image: {response.status_code}")
+        log.error("Error fetching image: HTTP %d", response.status_code)
 # Follow artist
 def follow_artist(artist, followed_artists, ignored_artists, root):
     if artist not in followed_artists:
         followed_artists.append(artist)
-        save_artists(followed_artists, ignored_artists)
+        add_followed_artist(artist)
     root.destroy()
 # Ignore artist
 def ignore_artist(artist, followed_artists, ignored_artists, root):
     if artist not in ignored_artists:
         ignored_artists.append(artist)
-        save_artists(followed_artists, ignored_artists)
+        add_ignored_artist(artist)
     root.destroy()
+def shutdown():
+    log.info("Shutting down e621 Discovery")
+
 # Main function
 def main():
+    log.info("Starting e621 Discovery")
+    atexit.register(shutdown)
+    init_db()
     followed_artists, ignored_artists = load_artists()
     current_tags = ""
     page = 1
     while True:
         posts = fetch_posts(tags=current_tags, page=page)
         if not posts:
-            print("No more posts available.")
+            log.info("No more posts available")
             break
         search_triggered = False
         for post in posts:
