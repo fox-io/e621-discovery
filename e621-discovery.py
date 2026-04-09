@@ -5,6 +5,7 @@ import time
 import sys
 import logging
 import atexit
+import threading
 from datetime import datetime, timezone
 from PIL import Image
 from io import BytesIO
@@ -25,6 +26,18 @@ HEADERS = {
     "User-Agent": "e621 Discovery Script by YourUsername"
 }
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
+
+_last_api_request = 0.0
+
+def api_get(url, **kwargs):
+    """Rate-limited GET for e621 API endpoints (1 req/s)."""
+    global _last_api_request
+    elapsed = time.monotonic() - _last_api_request
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+    _last_api_request = time.monotonic()
+    kwargs.setdefault("headers", HEADERS)
+    return requests.get(url, **kwargs)
 
 def get_db():
     """Return a connection to the SQLite database."""
@@ -100,7 +113,6 @@ def load_banned_tags():
     return tags
 # Fetch posts from e621 API
 def fetch_posts(tags="", page=1, random_order=True):
-    time.sleep(1) # Respect e621 rate limit of 1 request per second
     if random_order:
         combined_tags = ("order:random " + tags).strip() if tags else "order:random"
     else:
@@ -110,7 +122,7 @@ def fetch_posts(tags="", page=1, random_order=True):
         "tags": combined_tags,
         "page": page
     }
-    response = requests.get(API_URL, headers=HEADERS, params=params)
+    response = api_get(API_URL, params=params)
     if response.status_code == 200:
         posts = response.json().get("posts", [])
         log.info("Received %d posts", len(posts))
@@ -180,7 +192,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                 invalid_tags = []
                 for tag in tags:
                     params = {"search[name]": tag.lstrip("-")}
-                    resp = requests.get(tag_url, headers=HEADERS, params=params)
+                    resp = api_get(tag_url, params=params)
                     if resp.status_code == 200:
                         if not resp.json():
                             invalid_tags.append(tag)
@@ -266,10 +278,65 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
             row.bind("<MouseWheel>", _on_mousewheel)
         tk.Frame(btn_frame, height=10).pack()
         tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
+        # Middle column: artist thumbnails (loaded async after window opens)
+        thumb_frame = tk.Frame(root)
+        thumb_frame.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
+        tk.Label(thumb_frame, text="More by artist").pack(anchor="w", pady=(0, 4))
+        thumb_frame.images = []
+        thumb_labels = []
+        for _ in range(3):
+            lbl = tk.Label(thumb_frame, text="…", fg="gray")
+            lbl.pack(pady=(0, 4))
+            thumb_labels.append(lbl)
+        def _load_thumbnails_bg():
+            try:
+                resp = api_get(API_URL, params={"tags": artist, "limit": 5})
+                if resp.status_code != 200:
+                    return
+                candidates = [
+                    p for p in resp.json().get("posts", [])
+                    if p.get("id") != post.get("id")
+                    and p.get("file", {}).get("ext", "") in ("jpg", "jpeg", "png", "gif", "bmp", "webp")
+                ]
+                loaded = 0
+                for p in candidates:
+                    if loaded >= len(thumb_labels):
+                        break
+                    preview_url = p.get("preview", {}).get("url")
+                    if not preview_url:
+                        continue
+                    try:
+                        r = requests.get(preview_url, headers=HEADERS)
+                        if r.status_code != 200:
+                            continue
+                        thumb = Image.open(BytesIO(r.content))
+                        thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
+                        def apply(i=loaded, t=thumb):
+                            try:
+                                tk_thumb = ImageTk.PhotoImage(t)
+                                thumb_labels[i].config(image=tk_thumb, text="")
+                                thumb_labels[i].image = tk_thumb
+                                thumb_frame.images.append(tk_thumb)
+                            except tk.TclError:
+                                pass
+                        root.after(0, apply)
+                        loaded += 1
+                    except Exception:
+                        continue
+                for i in range(loaded, len(thumb_labels)):
+                    def clear(lbl=thumb_labels[i]):
+                        try:
+                            lbl.config(text="(none)")
+                        except tk.TclError:
+                            pass
+                    root.after(0, clear)
+            except Exception as e:
+                log.warning("Thumbnail load failed: %s", e)
+        threading.Thread(target=_load_thumbnails_bg, daemon=True).start()
         # Right column: image
         tk_img = ImageTk.PhotoImage(img)
         img_label = tk.Label(root, image=tk_img)
-        img_label.grid(row=0, column=1, sticky="nw", padx=10, pady=10)
+        img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
         root.mainloop()
         return result_dict
     else:
