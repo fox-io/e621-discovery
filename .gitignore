@@ -1,7 +1,6 @@
 .DS_Store
-followed_artists.json
+e621-discovery.sqlite3
 .gitignore
-ignored_artists.json
 AGENTS.md
 
 # Python
