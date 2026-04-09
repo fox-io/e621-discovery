@@ -186,12 +186,15 @@ def display_post(post, followed_artists, ignored_artists, current_tags="", rando
             root.destroy()
         random_cb.config(command=on_random_toggle)
         tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
-        tk.Button(btn_frame, text="Follow", width=10, command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
-        tk.Button(btn_frame, text="Ignore", width=10, command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(anchor="w", pady=2)
+        action_frame = tk.Frame(btn_frame)
+        action_frame.pack(anchor="w", pady=2)
         def skip_artist():
             log.info("Skipped artist '%s' (post %s)", artist, post.get("id", "?"))
             root.destroy()
-        tk.Button(btn_frame, text="Skip", width=10, command=skip_artist).pack(anchor="w", pady=2)
+        tk.Button(action_frame, text="❤️", command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
+        tk.Button(action_frame, text="🚫", command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
+        tk.Button(action_frame, text="⏭️", command=skip_artist).pack(side="left")
+        tk.Frame(btn_frame, height=10).pack()
         tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
         # Right column: image
         tk_img = ImageTk.PhotoImage(img)
