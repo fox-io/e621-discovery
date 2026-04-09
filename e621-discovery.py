@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+import time
 import sys
 from PIL import Image
 from io import BytesIO
@@ -35,6 +36,7 @@ def save_artists(followed_artists, ignored_artists):
         json.dump(ignored_artists, f)
 # Fetch posts from e621 API
 def fetch_posts(tags="", page=1):
+    time.sleep(1) # Respect e621 rate limit of 1 request per second
     params = {
         "tags": tags,
         "page": page
@@ -47,6 +49,7 @@ def fetch_posts(tags="", page=1):
         return []
 # Display post and handle user interaction
 def display_post(post, followed_artists, ignored_artists):
+    result_dict = {}
     artist_list = post.get("tags", {}).get("artist", [])
     artist = artist_list[0] if artist_list else "Unknown"
     if artist in followed_artists or artist in ignored_artists:
@@ -86,6 +89,7 @@ def display_post(post, followed_artists, ignored_artists):
         img_label = tk.Label(root, image=tk_img)
         img_label.grid(row=0, column=1, sticky="nw", padx=10, pady=10)
         root.mainloop()
+        return result_dict
     else:
         print(f"Error fetching image: {response.status_code}")
 # Follow artist
@@ -103,15 +107,27 @@ def ignore_artist(artist, followed_artists, ignored_artists, root):
 # Main function
 def main():
     followed_artists, ignored_artists = load_artists()
+    current_tags = ""
     page = 1
     while True:
         posts = fetch_posts(page=page)
+        posts = fetch_posts(tags=current_tags, page=page)
         if not posts:
             print("No more posts available.")
             break
+        search_triggered = False
         for post in posts:
             display_post(post, followed_artists, ignored_artists)
         page += 1
+            res = display_post(post, followed_artists, ignored_artists)
+            if res and res.get("action") == "search":
+                current_tags = res.get("tags", "")
+                page = 1
+                search_triggered = True
+                break
+        
+        if not search_triggered:
+            page += 1
 
 if __name__ == "__main__":
     main()
