@@ -6,7 +6,9 @@ import sys
 import logging
 import atexit
 import threading
+import queue
 import json
+import gc
 from datetime import datetime, timezone
 from PIL import Image
 from io import BytesIO
@@ -38,13 +40,24 @@ HEADERS = {
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
 
 _last_api_request = 0.0
+# Holds tkinter widget refs across display_post calls so background threads
+# can never be the last holder, preventing Tcl_AsyncDelete crashes.
+_tk_keepalive: list = []
 
-def api_get(url, **kwargs):
-    """Rate-limited GET for e621 API endpoints (1 req/s)."""
+def api_get(url, stop_event=None, **kwargs):
+    """Rate-limited GET for e621 API endpoints (1 req/s).
+    Pass stop_event to allow the rate-limit sleep to be interrupted."""
     global _last_api_request
     elapsed = time.monotonic() - _last_api_request
     if elapsed < 1.0:
-        time.sleep(1.0 - elapsed)
+        remaining = 1.0 - elapsed
+        if stop_event:
+            if stop_event.wait(timeout=remaining):
+                raise InterruptedError("api_get aborted via stop_event")
+        else:
+            time.sleep(remaining)
+    if stop_event and stop_event.is_set():
+        raise InterruptedError("api_get aborted via stop_event")
     _last_api_request = time.monotonic()
     kwargs.setdefault("headers", HEADERS)
     return requests.get(url, **kwargs)
@@ -180,19 +193,88 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
         root.title("e621 Discovery")
         root.geometry("+0+0")
         root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
+        stop_event = threading.Event()
+        _ui_queue: queue.Queue = queue.Queue()
+        _thumb_results: queue.Queue = queue.Queue()  # (slot, post_dict, PIL.Image) or ("done", count)
+        _swap_results: queue.Queue = queue.Queue()   # (PIL.Image|None, clicked_post, prev_post)
+        _poll_after_id: list = [None]
+        def _poll_ui_queue():
+            # Callbacks from _ui_queue (main-thread-safe operations)
+            try:
+                while True:
+                    cb = _ui_queue.get_nowait()
+                    try:
+                        cb()
+                    except tk.TclError:
+                        pass
+            except queue.Empty:
+                pass
+            # Thumbnail load results (thread put plain data; we do tkinter work here)
+            try:
+                while True:
+                    item = _thumb_results.get_nowait()
+                    if item[0] == "done":
+                        for i in range(item[1], len(thumb_labels)):
+                            try:
+                                thumb_labels[i].config(text="(none)")
+                            except tk.TclError:
+                                pass
+                    else:
+                        slot, p, pil_thumb = item
+                        try:
+                            tk_thumb = ImageTk.PhotoImage(pil_thumb)
+                            thumb_labels[slot].config(image=tk_thumb, text="", cursor="pointinghand")
+                            thumb_images.append(tk_thumb)
+                            thumb_post_map[slot] = p
+                            thumb_labels[slot].bind("<Button-1>", lambda e, idx=slot: on_thumb_click(idx))
+                        except tk.TclError:
+                            pass
+            except queue.Empty:
+                pass
+            # Image swap results
+            try:
+                while True:
+                    pil_image, clicked_post_data, prev_post_data = _swap_results.get_nowait()
+                    if pil_image is not None:
+                        try:
+                            new_tk_img = ImageTk.PhotoImage(pil_image)
+                            img_label.config(image=new_tk_img)
+                            current_main["tk_img"] = new_tk_img
+                            current_main["img"] = pil_image
+                            build_tag_list(clicked_post_data)
+                        except tk.TclError:
+                            pass
+                    else:
+                        current_main["post"] = prev_post_data
+            except queue.Empty:
+                pass
+            if not stop_event.is_set():
+                _poll_after_id[0] = root.after(50, _poll_ui_queue)
+        _poll_after_id[0] = root.after(50, _poll_ui_queue)
+        def _on_destroy(e):
+            if e.widget is root:
+                stop_event.set()
+                if _poll_after_id[0] is not None:
+                    try:
+                        root.after_cancel(_poll_after_id[0])
+                    except tk.TclError:
+                        pass
+        root.bind("<Destroy>", _on_destroy)
         # Left column: artist label and buttons
         btn_frame = tk.Frame(root)
         btn_frame.grid(row=0, column=0, sticky="nw", padx=10, pady=10)
         # Random order checkbox (packed first so it appears at the top)
-        random_var = tk.BooleanVar(value=random_order)
-        random_cb = tk.Checkbutton(btn_frame, text="Random order", variable=random_var)
+        random_state = [random_order]  # plain mutable; avoids BooleanVar GC crash in threads
+        random_cb = tk.Checkbutton(btn_frame, text="Random order")
+        if random_order:
+            random_cb.select()
         random_cb.pack(anchor="w", pady=(0, 5))
         def perform_search():
             query = search_entry.get().strip()
             if not query:
                 result_dict["action"] = "search"
                 result_dict["tags"] = ""
-                result_dict["random_order"] = random_var.get()
+                result_dict["random_order"] = random_state[0]
                 root.destroy()
                 return
 
@@ -214,7 +296,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                 else:
                     result_dict["action"] = "search"
                     result_dict["tags"] = " ".join(tags)
-                    result_dict["random_order"] = random_var.get()
+                    result_dict["random_order"] = random_state[0]
                     root.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to connect: {e}")
@@ -229,9 +311,10 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
         search_btn.pack(side="left")
         # Set checkbox command after search_entry exists so the toggle can read it
         def on_random_toggle():
+            random_state[0] = not random_state[0]
             result_dict["action"] = "search"
             result_dict["tags"] = search_entry.get().strip() or current_tags
-            result_dict["random_order"] = random_var.get()
+            result_dict["random_order"] = random_state[0]
             root.destroy()
         random_cb.config(command=on_random_toggle)
         tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
@@ -336,32 +419,36 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
             thumb_post_map[slot_idx] = current_main["post"]
             prev_post = current_main["post"]
             current_main["post"] = clicked_post
-            def load_and_swap():
+            # Thread captures ONLY plain Python objects via default args — no tkinter refs
+            def _swap_thread(url=full_url, cp=clicked_post, pp=prev_post):
                 try:
-                    r = requests.get(full_url, headers=HEADERS)
+                    if stop_event.is_set():
+                        _swap_results.put((None, cp, pp))
+                        return
+                    r = requests.get(url, headers=HEADERS, timeout=10)
                     if r.status_code != 200:
-                        current_main["post"] = prev_post
+                        _swap_results.put((None, cp, pp))
                         return
                     new_img_pil = Image.open(BytesIO(r.content))
                     new_img_pil.thumbnail((800, 800), Image.Resampling.LANCZOS)
-                    def apply():
-                        try:
-                            new_tk_img = ImageTk.PhotoImage(new_img_pil)
-                            img_label.config(image=new_tk_img)
-                            current_main["tk_img"] = new_tk_img
-                            current_main["img"] = new_img_pil
-                            build_tag_list(clicked_post)
-                        except tk.TclError:
-                            pass
-                    root.after(0, apply)
+                    _swap_results.put((new_img_pil, cp, pp))
                 except Exception as e:
                     log.warning("Failed to load swapped image: %s", e)
-                    current_main["post"] = prev_post
-            threading.Thread(target=load_and_swap, daemon=True).start()
+                    _swap_results.put((None, cp, pp))
+            t = threading.Thread(target=_swap_thread, daemon=True)
+            _bg_threads.append(t)
+            t.start()
+        _bg_threads: list = []
         def _load_thumbnails_bg():
+            # Captures ONLY plain Python objects — zero tkinter references.
+            # All tkinter work is done by _poll_ui_queue reading _thumb_results.
             try:
-                resp = api_get(API_URL, params={"tags": artist, "limit": 5})
+                if stop_event.is_set():
+                    _thumb_results.put(("done", 0))
+                    return
+                resp = api_get(API_URL, stop_event=stop_event, params={"tags": artist, "limit": 5})
                 if resp.status_code != 200:
+                    _thumb_results.put(("done", 0))
                     return
                 candidates = [
                     p for p in resp.json().get("posts", [])
@@ -370,45 +457,47 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                 ]
                 loaded = 0
                 for p in candidates:
-                    if loaded >= len(thumb_labels):
+                    if stop_event.is_set():
+                        break
+                    if loaded >= 3:
                         break
                     preview_url = p.get("preview", {}).get("url")
                     if not preview_url:
                         continue
                     try:
-                        r = requests.get(preview_url, headers=HEADERS)
+                        r = requests.get(preview_url, headers=HEADERS, timeout=5)
                         if r.status_code != 200:
                             continue
                         thumb = Image.open(BytesIO(r.content))
                         thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
-                        def apply(i=loaded, t=thumb, p=p):
-                            try:
-                                tk_thumb = ImageTk.PhotoImage(t)
-                                thumb_labels[i].config(image=tk_thumb, text="", cursor="pointinghand")
-                                thumb_images.append(tk_thumb)
-                                thumb_post_map[i] = p
-                                thumb_labels[i].bind("<Button-1>", lambda e, idx=i: on_thumb_click(idx))
-                            except tk.TclError:
-                                pass
-                        root.after(0, apply)
+                        _thumb_results.put((loaded, p, thumb))
                         loaded += 1
                     except Exception:
                         continue
-                for i in range(loaded, len(thumb_labels)):
-                    def clear(lbl=thumb_labels[i]):
-                        try:
-                            lbl.config(text="(none)")
-                        except tk.TclError:
-                            pass
-                    root.after(0, clear)
+                _thumb_results.put(("done", loaded))
+            except InterruptedError:
+                _thumb_results.put(("done", 0))
             except Exception as e:
                 log.warning("Thumbnail load failed: %s", e)
-        threading.Thread(target=_load_thumbnails_bg, daemon=True).start()
+                _thumb_results.put(("done", 0))
+        t = threading.Thread(target=_load_thumbnails_bg, daemon=True)
+        _bg_threads.append(t)
+        t.start()
         # Right column: image
         tk_img = ImageTk.PhotoImage(img)
         img_label = tk.Label(root, image=tk_img)
         img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
+        # Keep refs alive so background threads can never be the last holder
+        # of a tkinter object. Overwritten at the start of the next call.
+        _tk_keepalive[:] = [root, img_label, tag_inner, tag_canvas, tk_img, thumb_images, current_main] + list(thumb_labels)
+        gc.collect()       # flush any pending cycles before threads run
+        gc.disable()       # prevent background threads from triggering cyclic GC
         root.mainloop()
+        stop_event.set()
+        for t in _bg_threads:
+            t.join(timeout=15.0)
+        gc.enable()
+        gc.collect()       # collect in main thread now that threads are done
         return result_dict
     else:
         log.error("Error fetching image: HTTP %d", response.status_code)
@@ -424,13 +513,26 @@ def ignore_artist(artist, followed_artists, ignored_artists, root):
         ignored_artists.append(artist)
         add_ignored_artist(artist)
     root.destroy()
-def shutdown():
+def shutdown(session_start: str):
     log.info("Shutting down e621 Discovery")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT tag FROM followed_artists WHERE timestamp >= ? ORDER BY timestamp",
+        (session_start,)
+    ).fetchall()
+    conn.close()
+    if rows:
+        artists = [row[0] for row in rows]
+        log.info("Artists followed this session:")
+        print("\n" + "\n".join(artists))
+    else:
+        log.info("No artists followed this session.")
 
 # Main function
 def main():
     log.info("Starting e621 Discovery")
-    atexit.register(shutdown)
+    session_start = datetime.now(timezone.utc).isoformat()
+    atexit.register(shutdown, session_start)
     init_db()
     followed_artists, ignored_artists = load_artists()
     banned_tags = load_banned_tags()
