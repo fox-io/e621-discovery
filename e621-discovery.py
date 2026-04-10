@@ -332,7 +332,6 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
             prev_thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
             prev_tk_thumb = ImageTk.PhotoImage(prev_thumb)
             thumb_labels[slot_idx].config(image=prev_tk_thumb, text="")
-            thumb_labels[slot_idx].image = prev_tk_thumb
             thumb_images.append(prev_tk_thumb)
             thumb_post_map[slot_idx] = current_main["post"]
             prev_post = current_main["post"]
@@ -349,7 +348,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                         try:
                             new_tk_img = ImageTk.PhotoImage(new_img_pil)
                             img_label.config(image=new_tk_img)
-                            img_label.image = new_tk_img
+                            current_main["tk_img"] = new_tk_img
                             current_main["img"] = new_img_pil
                             build_tag_list(clicked_post)
                         except tk.TclError:
@@ -386,7 +385,6 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                             try:
                                 tk_thumb = ImageTk.PhotoImage(t)
                                 thumb_labels[i].config(image=tk_thumb, text="", cursor="pointinghand")
-                                thumb_labels[i].image = tk_thumb
                                 thumb_images.append(tk_thumb)
                                 thumb_post_map[i] = p
                                 thumb_labels[i].bind("<Button-1>", lambda e, idx=i: on_thumb_click(idx))
