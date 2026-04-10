@@ -298,6 +298,67 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
             lbl = tk.Label(thumb_frame, text="…", fg="gray")
             lbl.pack(pady=(0, 4))
             thumb_labels.append(lbl)
+        current_main: dict = {"post": post, "img": img}
+        thumb_post_map: list = [None, None, None]
+        def build_tag_list(post_data):
+            for widget in tag_inner.winfo_children():
+                widget.destroy()
+            new_tags = sorted(tag for tags in post_data.get("tags", {}).values() for tag in tags)
+            for tag in new_tags:
+                row = tk.Frame(tag_inner)
+                row.pack(fill="x", anchor="w")
+                plus_lbl = tk.Label(row, text="+", fg="green", cursor="pointinghand")
+                plus_lbl.pack(side="left", padx=(0, 2))
+                plus_lbl.bind("<Button-1>", lambda e, t=tag: add_tag_to_search(t))
+                plus_lbl.bind("<MouseWheel>", _on_mousewheel)
+                minus_lbl = tk.Label(row, text="-", fg="red", cursor="pointinghand")
+                minus_lbl.pack(side="left", padx=(0, 4))
+                minus_lbl.bind("<Button-1>", lambda e, t=tag: ban_tag(t))
+                minus_lbl.bind("<MouseWheel>", _on_mousewheel)
+                tag_lbl = tk.Label(row, text=tag, anchor="w")
+                tag_lbl.pack(side="left")
+                tag_lbl.bind("<MouseWheel>", _on_mousewheel)
+                row.bind("<MouseWheel>", _on_mousewheel)
+            tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
+        def on_thumb_click(slot_idx):
+            clicked_post = thumb_post_map[slot_idx]
+            if clicked_post is None:
+                return
+            full_url = clicked_post.get("file", {}).get("url")
+            if not full_url:
+                return
+            # Immediately swap current main image into the thumbnail slot
+            prev_thumb = current_main["img"].copy()
+            prev_thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
+            prev_tk_thumb = ImageTk.PhotoImage(prev_thumb)
+            thumb_labels[slot_idx].config(image=prev_tk_thumb, text="")
+            thumb_labels[slot_idx].image = prev_tk_thumb
+            thumb_images.append(prev_tk_thumb)
+            thumb_post_map[slot_idx] = current_main["post"]
+            prev_post = current_main["post"]
+            current_main["post"] = clicked_post
+            def load_and_swap():
+                try:
+                    r = requests.get(full_url, headers=HEADERS)
+                    if r.status_code != 200:
+                        current_main["post"] = prev_post
+                        return
+                    new_img_pil = Image.open(BytesIO(r.content))
+                    new_img_pil.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                    def apply():
+                        try:
+                            new_tk_img = ImageTk.PhotoImage(new_img_pil)
+                            img_label.config(image=new_tk_img)
+                            img_label.image = new_tk_img
+                            current_main["img"] = new_img_pil
+                            build_tag_list(clicked_post)
+                        except tk.TclError:
+                            pass
+                    root.after(0, apply)
+                except Exception as e:
+                    log.warning("Failed to load swapped image: %s", e)
+                    current_main["post"] = prev_post
+            threading.Thread(target=load_and_swap, daemon=True).start()
         def _load_thumbnails_bg():
             try:
                 resp = api_get(API_URL, params={"tags": artist, "limit": 5})
@@ -321,12 +382,14 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                             continue
                         thumb = Image.open(BytesIO(r.content))
                         thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
-                        def apply(i=loaded, t=thumb):
+                        def apply(i=loaded, t=thumb, p=p):
                             try:
                                 tk_thumb = ImageTk.PhotoImage(t)
-                                thumb_labels[i].config(image=tk_thumb, text="")
+                                thumb_labels[i].config(image=tk_thumb, text="", cursor="pointinghand")
                                 thumb_labels[i].image = tk_thumb
                                 thumb_images.append(tk_thumb)
+                                thumb_post_map[i] = p
+                                thumb_labels[i].bind("<Button-1>", lambda e, idx=i: on_thumb_click(idx))
                             except tk.TclError:
                                 pass
                         root.after(0, apply)
