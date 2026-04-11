@@ -238,7 +238,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                     if pil_image is not None:
                         try:
                             new_tk_img = ImageTk.PhotoImage(pil_image)
-                            img_label.config(image=new_tk_img)
+                            img_label.config(image=new_tk_img, text="", width=0, height=0)
                             current_main["tk_img"] = new_tk_img
                             current_main["img"] = pil_image
                             build_tag_list(clicked_post_data)
@@ -419,6 +419,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
             thumb_post_map[slot_idx] = current_main["post"]
             prev_post = current_main["post"]
             current_main["post"] = clicked_post
+            img_label.config(image="", text="Loading…", compound="center", width=40, height=20)
             # Thread captures ONLY plain Python objects via default args — no tkinter refs
             def _swap_thread(url=full_url, cp=clicked_post, pp=prev_post):
                 try:
