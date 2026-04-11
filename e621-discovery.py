@@ -10,7 +10,7 @@ import queue
 import json
 import gc
 from datetime import datetime, timezone
-from PIL import Image
+from PIL import Image, ImageDraw
 from io import BytesIO
 import tkinter as tk
 from tkinter import messagebox
@@ -40,9 +40,6 @@ HEADERS = {
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
 
 _last_api_request = 0.0
-# Holds tkinter widget refs across display_post calls so background threads
-# can never be the last holder, preventing Tcl_AsyncDelete crashes.
-_tk_keepalive: list = []
 
 def api_get(url, stop_event=None, **kwargs):
     """Rate-limited GET for e621 API endpoints (1 req/s).
@@ -153,314 +150,287 @@ def fetch_posts(tags="", page=1, random_order=True):
     else:
         log.error("Error fetching posts: HTTP %d", response.status_code)
         return []
-# Display post and handle user interaction
-def display_post(post, followed_artists, ignored_artists, banned_tags, current_tags="", random_order=True):
-    result_dict = {}
-    artist_list = post.get("tags", {}).get("artist", [])
-    artist = artist_list[0] if artist_list else "Unknown"
-    if artist in followed_artists:
-        log.info("Skipping post %s — artist '%s' is already followed", post.get("id", "?"), artist)
-        return
-    if artist in ignored_artists:
-        log.info("Skipping post %s — artist '%s' is already ignored", post.get("id", "?"), artist)
-        return
-    post_tag_set = {t for tags in post.get("tags", {}).values() for t in tags}
-    hit = post_tag_set & set(banned_tags)
-    if hit:
-        log.info("Skipping post %s — contains banned tag(s): %s", post.get("id", "?"), ", ".join(hit))
-        return
-    file_info = post.get("file", {})
-    image_url = file_info.get("url")
-    file_ext = file_info.get("ext", "")
-    if not image_url:
-        return
-    # Skip non-image file types (videos, flash, etc.)
-    if file_ext not in ("jpg", "jpeg", "png", "gif", "bmp", "webp"):
-        return
-    log.info("Downloading image for post %s from %s", post.get("id", "?"), image_url)
-    response = requests.get(image_url)
-    if response.status_code == 200:
-        img_data = response.content
-        try:
-            img = Image.open(BytesIO(img_data))
-        except Exception:
-            log.warning("Skipping post: could not decode image from %s", image_url)
-            return
-        # Scale image to fit within a reasonable window size
-        max_size = (800, 800)
-        img.thumbnail(max_size, Image.Resampling.LANCZOS)
-        root = tk.Tk()
-        root.title("e621 Discovery")
-        root.geometry("+0+0")
-        root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
-        stop_event = threading.Event()
-        _ui_queue: queue.Queue = queue.Queue()
-        _thumb_results: queue.Queue = queue.Queue()  # (slot, post_dict, PIL.Image) or ("done", count)
-        _swap_results: queue.Queue = queue.Queue()   # (PIL.Image|None, clicked_post, prev_post)
-        _poll_after_id: list = [None]
-        def _poll_ui_queue():
-            # Callbacks from _ui_queue (main-thread-safe operations)
-            try:
-                while True:
-                    cb = _ui_queue.get_nowait()
-                    try:
-                        cb()
-                    except tk.TclError:
-                        pass
-            except queue.Empty:
-                pass
-            # Thumbnail load results (thread put plain data; we do tkinter work here)
-            try:
-                while True:
-                    item = _thumb_results.get_nowait()
-                    if item[0] == "done":
-                        for i in range(item[1], len(thumb_labels)):
-                            try:
-                                thumb_labels[i].config(text="(none)")
-                            except tk.TclError:
-                                pass
-                    else:
-                        slot, p, pil_thumb = item
-                        try:
-                            tk_thumb = ImageTk.PhotoImage(pil_thumb)
-                            thumb_labels[slot].config(image=tk_thumb, text="", cursor="pointinghand")
-                            thumb_images.append(tk_thumb)
-                            thumb_post_map[slot] = p
-                            thumb_labels[slot].bind("<Button-1>", lambda e, idx=slot: on_thumb_click(idx))
-                        except tk.TclError:
-                            pass
-            except queue.Empty:
-                pass
-            # Image swap results
-            try:
-                while True:
-                    pil_image, clicked_post_data, prev_post_data = _swap_results.get_nowait()
-                    if pil_image is not None:
-                        try:
-                            new_tk_img = ImageTk.PhotoImage(pil_image)
-                            img_label.config(image=new_tk_img, text="", width=0, height=0)
-                            current_main["tk_img"] = new_tk_img
-                            current_main["img"] = pil_image
-                            build_tag_list(clicked_post_data)
-                        except tk.TclError:
-                            pass
-                    else:
-                        current_main["post"] = prev_post_data
-            except queue.Empty:
-                pass
-            if not stop_event.is_set():
-                _poll_after_id[0] = root.after(50, _poll_ui_queue)
-        _poll_after_id[0] = root.after(50, _poll_ui_queue)
-        def _on_destroy(e):
-            if e.widget is root:
-                stop_event.set()
-                if _poll_after_id[0] is not None:
-                    try:
-                        root.after_cancel(_poll_after_id[0])
-                    except tk.TclError:
-                        pass
-        root.bind("<Destroy>", _on_destroy)
-        # Left column: artist label and buttons
-        btn_frame = tk.Frame(root)
-        btn_frame.grid(row=0, column=0, sticky="nw", padx=10, pady=10)
-        # Random order checkbox (packed first so it appears at the top)
-        random_state = [random_order]  # plain mutable; avoids BooleanVar GC crash in threads
-        random_cb = tk.Checkbutton(btn_frame, text="Random order")
-        if random_order:
-            random_cb.select()
-        random_cb.pack(anchor="w", pady=(0, 5))
-        def perform_search():
-            query = search_entry.get().strip()
-            if not query:
-                result_dict["action"] = "search"
-                result_dict["tags"] = ""
-                result_dict["random_order"] = random_state[0]
-                root.destroy()
-                return
+# ──────────────────────────────────────────────────────────────────────────────
+# Single persistent window
+# ──────────────────────────────────────────────────────────────────────────────
+class E621DiscoveryApp:
+    """Single persistent window that updates in place for each post."""
 
-            tags = query.split()
-            try:
-                tag_url = "https://e621.net/tags.json"
-                invalid_tags = []
-                for tag in tags:
-                    params = {"search[name]": tag.lstrip("-")}
-                    resp = api_get(tag_url, params=params)
-                    if resp.status_code == 200:
-                        if not resp.json():
-                            invalid_tags.append(tag)
-                    else:
-                        messagebox.showerror("API Error", f"Error searching tags: {resp.status_code}")
-                        return
-                if invalid_tags:
-                    messagebox.showinfo("Search Result", f"No tags found matching: {', '.join(invalid_tags)}")
-                else:
-                    result_dict["action"] = "search"
-                    result_dict["tags"] = " ".join(tags)
-                    result_dict["random_order"] = random_state[0]
-                    root.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to connect: {e}")
+    NUM_THUMBNAILS = 5
+    IMG_MAX = (800, 800)
+    THUMB_MAX = (100, 100)
 
-        search_frame = tk.Frame(btn_frame)
-        search_frame.pack(anchor="w", pady=(0, 10))
-        search_entry = tk.Entry(search_frame, width=15)
-        search_entry.insert(0, current_tags)
-        search_entry.bind("<Return>", lambda e: perform_search())
-        search_entry.pack(side="left", padx=(0, 5))
-        search_btn = tk.Button(search_frame, text="🔍", command=perform_search)
-        search_btn.pack(side="left")
-        # Set checkbox command after search_entry exists so the toggle can read it
-        def on_random_toggle():
-            random_state[0] = not random_state[0]
-            result_dict["action"] = "search"
-            result_dict["tags"] = search_entry.get().strip() or current_tags
-            result_dict["random_order"] = random_state[0]
-            root.destroy()
-        random_cb.config(command=on_random_toggle)
-        tk.Label(btn_frame, text=f"Artist: {artist}").pack(anchor="w")
-        action_frame = tk.Frame(btn_frame)
-        action_frame.pack(anchor="w", pady=2)
-        def skip_artist():
-            log.info("Skipped artist '%s' (post %s)", artist, post.get("id", "?"))
-            root.destroy()
-        tk.Button(action_frame, text="❤️", command=lambda: follow_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
-        tk.Button(action_frame, text="🚫", command=lambda: ignore_artist(artist, followed_artists, ignored_artists, root)).pack(side="left", padx=(0, 2))
-        tk.Button(action_frame, text="⏭️", command=skip_artist).pack(side="left")
-        # Tag listbox
-        tk.Label(btn_frame, text="Post Tags").pack(anchor="w", pady=(6, 0))
-        all_tags = sorted(tag for tags in post.get("tags", {}).values() for tag in tags)
-        tag_list_frame = tk.Frame(btn_frame)
-        tag_list_frame.pack(anchor="w")
-        tag_canvas = tk.Canvas(tag_list_frame, height=200, width=200, highlightthickness=0)
-        tag_scrollbar = tk.Scrollbar(tag_list_frame, orient="vertical", command=tag_canvas.yview)
-        tag_canvas.configure(yscrollcommand=tag_scrollbar.set)
-        tag_canvas.pack(side="left", fill="both")
-        tag_scrollbar.pack(side="left", fill="y")
-        tag_inner = tk.Frame(tag_canvas)
-        tag_canvas.create_window((0, 0), window=tag_inner, anchor="nw")
-        tag_inner.bind("<Configure>", lambda e: tag_canvas.configure(scrollregion=tag_canvas.bbox("all")))
-        def _on_mousewheel(event):
-            tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-        tag_canvas.bind("<MouseWheel>", _on_mousewheel)
-        tag_inner.bind("<MouseWheel>", _on_mousewheel)
-        def ban_tag(tag):
-            add_banned_tag(tag)
-            if tag not in banned_tags:
-                banned_tags.append(tag)
-        def add_tag_to_search(tag):
-            existing = search_entry.get().strip().split()
-            if tag not in existing:
-                existing.append(tag)
-            search_entry.delete(0, tk.END)
-            search_entry.insert(0, " ".join(existing))
-            perform_search()
-        for tag in all_tags:
-            row = tk.Frame(tag_inner)
-            row.pack(fill="x", anchor="w")
-            plus_lbl = tk.Label(row, text="+", fg="green", cursor="pointinghand")
-            plus_lbl.pack(side="left", padx=(0, 2))
-            plus_lbl.bind("<Button-1>", lambda e, t=tag: add_tag_to_search(t))
-            plus_lbl.bind("<MouseWheel>", _on_mousewheel)
-            minus_lbl = tk.Label(row, text="-", fg="red", cursor="pointinghand")
-            minus_lbl.pack(side="left", padx=(0, 4))
-            minus_lbl.bind("<Button-1>", lambda e, t=tag: ban_tag(t))
-            minus_lbl.bind("<MouseWheel>", _on_mousewheel)
-            tag_lbl = tk.Label(row, text=tag, anchor="w")
-            tag_lbl.pack(side="left")
-            tag_lbl.bind("<MouseWheel>", _on_mousewheel)
-            row.bind("<MouseWheel>", _on_mousewheel)
-        tk.Frame(btn_frame, height=10).pack()
-        tk.Button(btn_frame, text="Quit", width=10, command=lambda: sys.exit(0)).pack(anchor="w", pady=2)
-        # Middle column: artist thumbnails (loaded async after window opens)
-        thumb_frame = tk.Frame(root)
-        thumb_frame.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
-        tk.Label(thumb_frame, text="More by artist").pack(anchor="w", pady=(0, 4))
-        thumb_images: list = []
-        thumb_labels = []
-        for _ in range(5):
-            lbl = tk.Label(thumb_frame, text="…", fg="gray")
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("e621 Discovery")
+        self.root.geometry("+0+0")
+        self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
+
+        # Persistent session state
+        self.followed_artists, self.ignored_artists = load_artists()
+        self.banned_tags = load_banned_tags()
+        self.current_tags = ""
+        self.random_order = True
+        self.page = 1
+        self.post_buffer: list = []
+        self._fetching = False
+        self._fetch_gen = 0  # invalidated on search/random change
+
+        # Per-post display state
+        self.current_post: dict = {}
+        self.current_img: Image.Image = None
+        self._tk_img = None          # keeps main PhotoImage alive
+        self.thumb_images: list = [] # keeps thumbnail PhotoImages alive
+        self.thumb_post_map: list = [None] * self.NUM_THUMBNAILS
+        self._post_gen = 0           # incremented each time we start loading a new post
+
+        # Thread-to-main queues (threads put plain Python data only)
+        self._ui_q: queue.Queue = queue.Queue()       # callbacks from batch fetch
+        self._image_q: queue.Queue = queue.Queue()    # (gen, post, PIL|None)
+        self._thumb_q: queue.Queue = queue.Queue()    # (gen, kind, slot, post|None, PIL|None)
+        self._swap_q: queue.Queue = queue.Queue()     # (gen, PIL|None, clicked_post, prev_post)
+        self._bg_threads: list = []
+
+        self._build_ui()
+        self._ph_main, self._ph_thumb = self._make_placeholders()
+        self.root.after(50, self._poll)
+        gc.collect()
+        gc.disable()
+        self._advance()  # kick off the first post
+
+    # ──────────────────────────────────────────────────── UI (built once)
+
+    def _build_ui(self):
+        self.root.rowconfigure(0, weight=1)
+        left = tk.Frame(self.root)
+        left.grid(row=0, column=0, sticky="nsw", padx=10, pady=10)
+
+        self._random_state = [True]
+        self._random_cb = tk.Checkbutton(left, text="Random order",
+                                         command=self._on_random_toggle)
+        self._random_cb.select()
+        self._random_cb.pack(anchor="w", pady=(0, 5))
+
+        sf = tk.Frame(left)
+        sf.pack(anchor="w", pady=(0, 10))
+        self._search_entry = tk.Entry(sf, width=15)
+        self._search_entry.bind("<Return>", lambda e: self._perform_search())
+        self._search_entry.pack(side="left", padx=(0, 5))
+        tk.Button(sf, text="\U0001f50d", command=self._perform_search).pack(side="left")
+
+        self._artist_label = tk.Label(left, text="Artist: \u2014")
+        self._artist_label.pack(anchor="w")
+
+        af = tk.Frame(left)
+        af.pack(anchor="w", pady=2)
+        tk.Button(af, text="\u2764\ufe0f", command=self._follow).pack(side="left", padx=(0, 2))
+        tk.Button(af, text="\U0001f6ab", command=self._ignore).pack(side="left", padx=(0, 2))
+        tk.Button(af, text="\u23ed\ufe0f", command=self._skip).pack(side="left")
+
+        tk.Label(left, text="Post Tags").pack(anchor="w", pady=(6, 0))
+        # Quit pinned to bottom before the expanding tag frame
+        tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(
+            side="bottom", anchor="w", pady=2)
+        tk.Frame(left, height=10).pack(side="bottom")
+        tf = tk.Frame(left)
+        tf.pack(fill="both", expand=True)
+        self._tag_canvas = tk.Canvas(tf, width=200, highlightthickness=0)
+        sb = tk.Scrollbar(tf, orient="vertical", command=self._tag_canvas.yview)
+        self._tag_canvas.configure(yscrollcommand=sb.set)
+        self._tag_canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="left", fill="y")
+        self._tag_inner = tk.Frame(self._tag_canvas)
+        self._tag_canvas.create_window((0, 0), window=self._tag_inner, anchor="nw")
+        self._tag_inner.bind(
+            "<Configure>",
+            lambda e: self._tag_canvas.configure(
+                scrollregion=self._tag_canvas.bbox("all")))
+        self._tag_canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self._tag_inner.bind("<MouseWheel>", self._on_mousewheel)
+
+        mid = tk.Frame(self.root)
+        mid.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
+        tk.Label(mid, text="More by artist").pack(anchor="w", pady=(0, 4))
+        self._thumb_labels: list = []
+        for _ in range(self.NUM_THUMBNAILS):
+            lbl = tk.Label(mid, text="")
             lbl.pack(pady=(0, 4))
-            thumb_labels.append(lbl)
-        current_main: dict = {"post": post, "img": img}
-        thumb_post_map: list = [None, None, None, None, None]
-        def build_tag_list(post_data):
-            for widget in tag_inner.winfo_children():
-                widget.destroy()
-            new_tags = sorted(tag for tags in post_data.get("tags", {}).values() for tag in tags)
-            for tag in new_tags:
-                row = tk.Frame(tag_inner)
-                row.pack(fill="x", anchor="w")
-                plus_lbl = tk.Label(row, text="+", fg="green", cursor="pointinghand")
-                plus_lbl.pack(side="left", padx=(0, 2))
-                plus_lbl.bind("<Button-1>", lambda e, t=tag: add_tag_to_search(t))
-                plus_lbl.bind("<MouseWheel>", _on_mousewheel)
-                minus_lbl = tk.Label(row, text="-", fg="red", cursor="pointinghand")
-                minus_lbl.pack(side="left", padx=(0, 4))
-                minus_lbl.bind("<Button-1>", lambda e, t=tag: ban_tag(t))
-                minus_lbl.bind("<MouseWheel>", _on_mousewheel)
-                tag_lbl = tk.Label(row, text=tag, anchor="w")
-                tag_lbl.pack(side="left")
-                tag_lbl.bind("<MouseWheel>", _on_mousewheel)
-                row.bind("<MouseWheel>", _on_mousewheel)
-            tag_canvas.configure(scrollregion=tag_canvas.bbox("all"))
-        def on_thumb_click(slot_idx):
-            clicked_post = thumb_post_map[slot_idx]
-            if clicked_post is None:
-                return
-            full_url = clicked_post.get("file", {}).get("url")
-            if not full_url:
-                return
-            # Immediately swap current main image into the thumbnail slot
-            prev_thumb = current_main["img"].copy()
-            prev_thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
-            prev_tk_thumb = ImageTk.PhotoImage(prev_thumb)
-            thumb_labels[slot_idx].config(image=prev_tk_thumb, text="")
-            thumb_images.append(prev_tk_thumb)
-            thumb_post_map[slot_idx] = current_main["post"]
-            prev_post = current_main["post"]
-            current_main["post"] = clicked_post
-            img_label.config(image="", text="Loading…", compound="center", width=40, height=20)
-            # Thread captures ONLY plain Python objects via default args — no tkinter refs
-            def _swap_thread(url=full_url, cp=clicked_post, pp=prev_post):
+            self._thumb_labels.append(lbl)
+
+        self._img_label = tk.Label(self.root)
+        self._img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
+
+    # ──────────────────────────────────────────────────── helpers
+
+    def _make_placeholders(self):
+        """Create and return (main_placeholder, thumb_placeholder) as PhotoImages."""
+        r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
+        bg = (r >> 8, g >> 8, b >> 8)
+        border = (150, 150, 150)
+        text_color = (80, 80, 80)
+        # 800x600 main placeholder with centred "Loading..." text and 1px border
+        main = Image.new("RGB", (800, 600), bg)
+        d = ImageDraw.Draw(main)
+        d.rectangle([0, 0, 799, 599], outline=border)
+        text = "Loading..."
+        bb = d.textbbox((0, 0), text)
+        d.text(((800 - (bb[2] - bb[0])) // 2, (600 - (bb[3] - bb[1])) // 2),
+               text, fill=text_color)
+        # 100x100 thumbnail placeholder with 1px border
+        thumb = Image.new("RGB", (100, 100), bg)
+        ImageDraw.Draw(thumb).rectangle([0, 0, 99, 99], outline=border)
+        return ImageTk.PhotoImage(main), ImageTk.PhotoImage(thumb)
+
+    def _on_mousewheel(self, event):
+        self._tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def _set_loading(self):
+        self._artist_label.config(text="Artist: \u2014")
+        self._img_label.config(image=self._ph_main, text="", width=0, height=0)
+        for w in self._tag_inner.winfo_children():
+            w.destroy()
+        self._reset_thumbnails()
+
+    def _reset_thumbnails(self):
+        self.thumb_images.clear()
+        self.thumb_post_map = [None] * self.NUM_THUMBNAILS
+        for lbl in self._thumb_labels:
+            lbl.config(image=self._ph_thumb, text="", cursor="")
+            lbl.unbind("<Button-1>")
+
+    def _build_tag_list(self, post_data: dict):
+        for w in self._tag_inner.winfo_children():
+            w.destroy()
+        tags = sorted(t for ts in post_data.get("tags", {}).values() for t in ts)
+        for tag in tags:
+            row = tk.Frame(self._tag_inner)
+            row.pack(fill="x", anchor="w")
+            plus = tk.Label(row, text="+", fg="green", cursor="pointinghand")
+            plus.pack(side="left", padx=(0, 2))
+            plus.bind("<Button-1>", lambda e, t=tag: self._add_tag_to_search(t))
+            plus.bind("<MouseWheel>", self._on_mousewheel)
+            minus = tk.Label(row, text="-", fg="red", cursor="pointinghand")
+            minus.pack(side="left", padx=(0, 4))
+            minus.bind("<Button-1>", lambda e, t=tag: self._ban_tag(t))
+            minus.bind("<MouseWheel>", self._on_mousewheel)
+            lbl = tk.Label(row, text=tag, anchor="w")
+            lbl.pack(side="left")
+            lbl.bind("<MouseWheel>", self._on_mousewheel)
+            row.bind("<MouseWheel>", self._on_mousewheel)
+        self._tag_canvas.configure(scrollregion=self._tag_canvas.bbox("all"))
+
+    def _add_tag_to_search(self, tag: str):
+        existing = self._search_entry.get().strip().split()
+        if tag not in existing:
+            existing.append(tag)
+        self._search_entry.delete(0, tk.END)
+        self._search_entry.insert(0, " ".join(existing))
+        self._perform_search()
+
+    def _ban_tag(self, tag: str):
+        add_banned_tag(tag)
+        if tag not in self.banned_tags:
+            self.banned_tags.append(tag)
+
+    def _artist(self) -> str:
+        return (self.current_post.get("tags", {}).get("artist") or ["Unknown"])[0]
+
+    # ──────────────────────────────────────────────────── post navigation
+
+    def _invalidate_search(self):
+        """Discard in-flight batch fetches and reset pagination."""
+        self._fetch_gen += 1
+        self._fetching = False
+        self.post_buffer.clear()
+        self.page = 1
+
+    def _advance(self):
+        """Pop the next valid post from the buffer and start loading its image."""
+        while self.post_buffer:
+            post = self.post_buffer.pop(0)
+            artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
+            if artist in self.followed_artists or artist in self.ignored_artists:
+                log.info("Skipping %s — artist '%s' followed/ignored", post.get("id"), artist)
+                continue
+            post_tags = {t for ts in post.get("tags", {}).values() for t in ts}
+            hit = post_tags & set(self.banned_tags)
+            if hit:
+                log.info("Skipping %s — banned: %s", post.get("id"), ", ".join(hit))
+                continue
+            url = post.get("file", {}).get("url")
+            ext = post.get("file", {}).get("ext", "")
+            if not url or ext not in ("jpg", "jpeg", "png", "gif", "bmp", "webp"):
+                continue
+            # Valid post — start image download
+            self._post_gen += 1
+            gen = self._post_gen
+            self.current_post = post
+            self._set_loading()
+            if len(self.post_buffer) < 5:
+                self._fetch_batch()
+
+            def _img_thread(u=url, p=post, g=gen):
                 try:
-                    if stop_event.is_set():
-                        _swap_results.put((None, cp, pp))
-                        return
-                    r = requests.get(url, headers=HEADERS, timeout=10)
+                    r = requests.get(u, headers=HEADERS, timeout=30)
                     if r.status_code != 200:
-                        _swap_results.put((None, cp, pp))
+                        self._image_q.put((g, p, None))
                         return
-                    new_img_pil = Image.open(BytesIO(r.content))
-                    new_img_pil.thumbnail((800, 800), Image.Resampling.LANCZOS)
-                    _swap_results.put((new_img_pil, cp, pp))
-                except Exception as e:
-                    log.warning("Failed to load swapped image: %s", e)
-                    _swap_results.put((None, cp, pp))
-            t = threading.Thread(target=_swap_thread, daemon=True)
-            _bg_threads.append(t)
+                    pil = Image.open(BytesIO(r.content))
+                    pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
+                    self._image_q.put((g, p, pil))
+                except Exception as ex:
+                    log.warning("Image download failed: %s", ex)
+                    self._image_q.put((g, p, None))
+
+            t = threading.Thread(target=_img_thread, daemon=True)
+            self._bg_threads.append(t)
             t.start()
-        _bg_threads: list = []
-        def _load_thumbnails_bg():
-            # Captures ONLY plain Python objects — zero tkinter references.
-            # All tkinter work is done by _poll_ui_queue reading _thumb_results.
+            return
+        # Buffer empty — fetch a page then retry
+        self._fetch_batch(callback=self._advance)
+
+    def _fetch_batch(self, callback=None):
+        """Fetch a page of posts in a background thread."""
+        if self._fetching:
+            return
+        self._fetching = True
+        fgen = self._fetch_gen
+        tags, page, rand = self.current_tags, self.page, self.random_order
+        self.page += 1
+
+        def _thread():
+            posts = fetch_posts(tags=tags, page=page, random_order=rand)
+            def _on_main():
+                if fgen != self._fetch_gen:
+                    return  # search changed while fetch was in flight
+                self._fetching = False
+                self.post_buffer.extend(posts)
+                if callback:
+                    callback()
+            self._ui_q.put(_on_main)
+
+        t = threading.Thread(target=_thread, daemon=True)
+        self._bg_threads.append(t)
+        t.start()
+
+    def _start_thumbnail_load(self, artist: str, exclude_id):
+        gen = self._post_gen
+
+        def _thread(a=artist, eid=exclude_id, g=gen):
             try:
-                if stop_event.is_set():
-                    _thumb_results.put(("done", 0))
-                    return
-                resp = api_get(API_URL, stop_event=stop_event, params={"tags": artist, "limit": 7})
+                resp = api_get(API_URL, params={"tags": a, "limit": self.NUM_THUMBNAILS + 2})
                 if resp.status_code != 200:
-                    _thumb_results.put(("done", 0))
+                    self._thumb_q.put((g, "done", 0, None, None))
                     return
                 candidates = [
                     p for p in resp.json().get("posts", [])
-                    if p.get("id") != post.get("id")
-                    and p.get("file", {}).get("ext", "") in ("jpg", "jpeg", "png", "gif", "bmp", "webp")
+                    if p.get("id") != eid
+                    and p.get("file", {}).get("ext", "") in (
+                        "jpg", "jpeg", "png", "gif", "bmp", "webp")
                 ]
                 loaded = 0
                 for p in candidates:
-                    if stop_event.is_set():
-                        break
-                    if loaded >= 5:
+                    if loaded >= self.NUM_THUMBNAILS:
                         break
                     preview_url = p.get("preview", {}).get("url")
                     if not preview_url:
@@ -470,50 +440,192 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                         if r.status_code != 200:
                             continue
                         thumb = Image.open(BytesIO(r.content))
-                        thumb.thumbnail((100, 100), Image.Resampling.LANCZOS)
-                        _thumb_results.put((loaded, p, thumb))
+                        thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
+                        self._thumb_q.put((g, "thumb", loaded, p, thumb))
                         loaded += 1
                     except Exception:
                         continue
-                _thumb_results.put(("done", loaded))
-            except InterruptedError:
-                _thumb_results.put(("done", 0))
-            except Exception as e:
-                log.warning("Thumbnail load failed: %s", e)
-                _thumb_results.put(("done", 0))
-        t = threading.Thread(target=_load_thumbnails_bg, daemon=True)
-        _bg_threads.append(t)
+                self._thumb_q.put((g, "done", loaded, None, None))
+            except Exception as ex:
+                log.warning("Thumbnail load failed: %s", ex)
+                self._thumb_q.put((g, "done", 0, None, None))
+
+        t = threading.Thread(target=_thread, daemon=True)
+        self._bg_threads.append(t)
         t.start()
-        # Right column: image
-        tk_img = ImageTk.PhotoImage(img)
-        img_label = tk.Label(root, image=tk_img)
-        img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
-        # Keep refs alive so background threads can never be the last holder
-        # of a tkinter object. Overwritten at the start of the next call.
-        _tk_keepalive[:] = [root, img_label, tag_inner, tag_canvas, tk_img, thumb_images, current_main] + list(thumb_labels)
-        gc.collect()       # flush any pending cycles before threads run
-        gc.disable()       # prevent background threads from triggering cyclic GC
-        root.mainloop()
-        stop_event.set()
-        for t in _bg_threads:
-            t.join(timeout=15.0)
-        gc.enable()
-        gc.collect()       # collect in main thread now that threads are done
-        return result_dict
-    else:
-        log.error("Error fetching image: HTTP %d", response.status_code)
-# Follow artist
-def follow_artist(artist, followed_artists, ignored_artists, root):
-    if artist not in followed_artists:
-        followed_artists.append(artist)
-        add_followed_artist(artist)
-    root.destroy()
-# Ignore artist
-def ignore_artist(artist, followed_artists, ignored_artists, root):
-    if artist not in ignored_artists:
-        ignored_artists.append(artist)
-        add_ignored_artist(artist)
-    root.destroy()
+
+    # ──────────────────────────────────────────────────── user actions
+
+    def _follow(self):
+        artist = self._artist()
+        if artist not in self.followed_artists:
+            self.followed_artists.append(artist)
+            add_followed_artist(artist)
+        log.info("Followed artist '%s'", artist)
+        self._advance()
+
+    def _ignore(self):
+        artist = self._artist()
+        if artist not in self.ignored_artists:
+            self.ignored_artists.append(artist)
+            add_ignored_artist(artist)
+        log.info("Ignored artist '%s'", artist)
+        self._advance()
+
+    def _skip(self):
+        log.info("Skipped artist '%s'", self._artist())
+        self._advance()
+
+    def _on_random_toggle(self):
+        self._random_state[0] = not self._random_state[0]
+        self.random_order = self._random_state[0]
+        self._invalidate_search()
+        self._advance()
+
+    def _perform_search(self):
+        query = self._search_entry.get().strip()
+        tags = query.split() if query else []
+        if tags:
+            try:
+                invalid = []
+                for tag in tags:
+                    resp = api_get("https://e621.net/tags.json",
+                                   params={"search[name]": tag.lstrip("-")})
+                    if resp.status_code == 200:
+                        if not resp.json():
+                            invalid.append(tag)
+                    else:
+                        messagebox.showerror("API Error", f"HTTP {resp.status_code}")
+                        return
+                if invalid:
+                    messagebox.showinfo("Search", f"No tags found: {', '.join(invalid)}")
+                    return
+            except Exception as ex:
+                messagebox.showerror("Error", str(ex))
+                return
+        self.current_tags = " ".join(tags)
+        self._invalidate_search()
+        self._advance()
+
+    def _on_thumb_click(self, slot_idx: int):
+        clicked = self.thumb_post_map[slot_idx]
+        if clicked is None:
+            return
+        url = clicked.get("file", {}).get("url")
+        if not url:
+            return
+        # Move current main image → thumbnail slot
+        if self.current_img is not None:
+            prev_thumb = self.current_img.copy()
+            prev_thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
+            prev_tk = ImageTk.PhotoImage(prev_thumb)
+            self._thumb_labels[slot_idx].config(image=prev_tk, text="")
+            self.thumb_images.append(prev_tk)
+        self.thumb_post_map[slot_idx] = self.current_post
+        prev_post = self.current_post
+        self.current_post = clicked
+        self._img_label.config(image=self._ph_main, text="", width=0, height=0)
+        gen = self._post_gen
+
+        def _thread(u=url, cp=clicked, pp=prev_post, g=gen):
+            try:
+                r = requests.get(u, headers=HEADERS, timeout=10)
+                if r.status_code != 200:
+                    self._swap_q.put((g, None, cp, pp))
+                    return
+                pil = Image.open(BytesIO(r.content))
+                pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
+                self._swap_q.put((g, pil, cp, pp))
+            except Exception as ex:
+                log.warning("Swap failed: %s", ex)
+                self._swap_q.put((g, None, cp, pp))
+
+        t = threading.Thread(target=_thread, daemon=True)
+        self._bg_threads.append(t)
+        t.start()
+
+    # ──────────────────────────────────────────────────── polling loop
+
+    def _poll(self):
+        self._bg_threads = [t for t in self._bg_threads if t.is_alive()]
+
+        # Batch-fetch callbacks
+        try:
+            while True:
+                cb = self._ui_q.get_nowait()
+                try:
+                    cb()
+                except Exception as ex:
+                    log.warning("UI callback error: %s", ex)
+        except queue.Empty:
+            pass
+
+        # Image download results
+        try:
+            while True:
+                g, post, pil = self._image_q.get_nowait()
+                if g != self._post_gen:
+                    continue
+                if pil is None:
+                    log.warning("Image failed; advancing to next post")
+                    self.root.after(300, self._advance)
+                    continue
+                artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
+                self._artist_label.config(text=f"Artist: {artist}")
+                tk_img = ImageTk.PhotoImage(pil)
+                self._img_label.config(image=tk_img, text="", width=0, height=0)
+                self._tk_img = tk_img
+                self.current_img = pil
+                self.current_post = post
+                self._build_tag_list(post)
+                self._reset_thumbnails()
+                self._start_thumbnail_load(artist, post.get("id"))
+        except queue.Empty:
+            pass
+
+        # Thumbnail results
+        try:
+            while True:
+                item = self._thumb_q.get_nowait()
+                g, kind = item[0], item[1]
+                if g != self._post_gen:
+                    continue
+                if kind == "done":
+                    loaded = item[2]
+                    for i in range(loaded, self.NUM_THUMBNAILS):
+                        self._thumb_labels[i].config(text="(none)", image="")
+                else:
+                    _, _, slot, p, pil_thumb = item
+                    tk_thumb = ImageTk.PhotoImage(pil_thumb)
+                    self._thumb_labels[slot].config(
+                        image=tk_thumb, text="", cursor="pointinghand")
+                    self.thumb_images.append(tk_thumb)
+                    self.thumb_post_map[slot] = p
+                    self._thumb_labels[slot].bind(
+                        "<Button-1>", lambda e, idx=slot: self._on_thumb_click(idx))
+        except queue.Empty:
+            pass
+
+        # Swap results
+        try:
+            while True:
+                g, pil, cp, pp = self._swap_q.get_nowait()
+                if g != self._post_gen:
+                    continue
+                if pil is not None:
+                    tk_img = ImageTk.PhotoImage(pil)
+                    self._img_label.config(image=tk_img, text="", width=0, height=0)
+                    self._tk_img = tk_img
+                    self.current_img = pil
+                    self._build_tag_list(cp)
+                else:
+                    self.current_post = pp
+        except queue.Empty:
+            pass
+
+        self.root.after(50, self._poll)
+
+
 def shutdown(session_start: str):
     log.info("Shutting down e621 Discovery")
     conn = get_db()
@@ -529,34 +641,16 @@ def shutdown(session_start: str):
     else:
         log.info("No artists followed this session.")
 
-# Main function
+
 def main():
     log.info("Starting e621 Discovery")
     session_start = datetime.now(timezone.utc).isoformat()
     atexit.register(shutdown, session_start)
     init_db()
-    followed_artists, ignored_artists = load_artists()
-    banned_tags = load_banned_tags()
-    current_tags = ""
-    random_order = True
-    page = 1
-    while True:
-        posts = fetch_posts(tags=current_tags, page=page, random_order=random_order)
-        if not posts:
-            log.info("No more posts available")
-            break
-        search_triggered = False
-        for post in posts:
-            res = display_post(post, followed_artists, ignored_artists, banned_tags, current_tags, random_order)
-            if res and res.get("action") == "search":
-                current_tags = res.get("tags", "")
-                random_order = res.get("random_order", random_order)
-                page = 1
-                search_triggered = True
-                break
-        
-        if not search_triggered:
-            page += 1
+    root = tk.Tk()
+    E621DiscoveryApp(root)
+    root.mainloop()
+
 
 if __name__ == "__main__":
     main()
