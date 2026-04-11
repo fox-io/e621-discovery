@@ -377,12 +377,12 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
         tk.Label(thumb_frame, text="More by artist").pack(anchor="w", pady=(0, 4))
         thumb_images: list = []
         thumb_labels = []
-        for _ in range(3):
+        for _ in range(5):
             lbl = tk.Label(thumb_frame, text="…", fg="gray")
             lbl.pack(pady=(0, 4))
             thumb_labels.append(lbl)
         current_main: dict = {"post": post, "img": img}
-        thumb_post_map: list = [None, None, None]
+        thumb_post_map: list = [None, None, None, None, None]
         def build_tag_list(post_data):
             for widget in tag_inner.winfo_children():
                 widget.destroy()
@@ -447,7 +447,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                 if stop_event.is_set():
                     _thumb_results.put(("done", 0))
                     return
-                resp = api_get(API_URL, stop_event=stop_event, params={"tags": artist, "limit": 5})
+                resp = api_get(API_URL, stop_event=stop_event, params={"tags": artist, "limit": 7})
                 if resp.status_code != 200:
                     _thumb_results.put(("done", 0))
                     return
@@ -460,7 +460,7 @@ def display_post(post, followed_artists, ignored_artists, banned_tags, current_t
                 for p in candidates:
                     if stop_event.is_set():
                         break
-                    if loaded >= 3:
+                    if loaded >= 5:
                         break
                     preview_url = p.get("preview", {}).get("url")
                     if not preview_url:
