@@ -194,7 +194,7 @@ class E621DiscoveryApp:
         self._build_ui()
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
-        self._ph_main, self._ph_thumb = self._make_placeholders()
+        self._ph_main, self._ph_thumb, self._ph_thumb_none = self._make_placeholders()
         self.root.after(50, self._poll)
         self._advance()  # kick off the first post
 
@@ -284,10 +284,16 @@ class E621DiscoveryApp:
         bb = d.textbbox((0, 0), text)
         d.text(((800 - (bb[2] - bb[0])) // 2, (600 - (bb[3] - bb[1])) // 2),
                text, fill=text_color)
-        # 100x100 thumbnail placeholder with 1px border
-        thumb = Image.new("RGB", (100, 100), bg)
-        ImageDraw.Draw(thumb).rectangle([0, 0, 99, 99], outline=border)
-        return ImageTk.PhotoImage(main), ImageTk.PhotoImage(thumb)
+        # 100x100 thumbnail placeholder — "Loading..."
+        def _thumb_img(label_text):
+            img = Image.new("RGB", (100, 100), bg)
+            d2 = ImageDraw.Draw(img)
+            d2.rectangle([0, 0, 99, 99], outline=border)
+            bb2 = d2.textbbox((0, 0), label_text)
+            d2.text(((100 - (bb2[2] - bb2[0])) // 2, (100 - (bb2[3] - bb2[1])) // 2),
+                    label_text, fill=text_color)
+            return ImageTk.PhotoImage(img)
+        return ImageTk.PhotoImage(main), _thumb_img("Loading..."), _thumb_img("None")
 
     def _on_mousewheel(self, event):
         self._tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
@@ -602,7 +608,7 @@ class E621DiscoveryApp:
                 if kind == "done":
                     loaded = item[2]
                     for i in range(loaded, self.NUM_THUMBNAILS):
-                        self._thumb_labels[i].config(text="(none)", image="")
+                        self._thumb_labels[i].config(image=self._ph_thumb_none, text="")
                 else:
                     _, _, slot, p, pil_thumb = item
                     tk_thumb = ImageTk.PhotoImage(pil_thumb)
