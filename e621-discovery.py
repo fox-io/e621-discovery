@@ -445,19 +445,27 @@ class E621DiscoveryApp:
 
     def _start_thumbnail_load(self, artist: str, exclude_id):
         gen = self._post_gen
+        banned = frozenset(self.banned_tags)  # snapshot at dispatch time
 
-        def _thread(a=artist, eid=exclude_id, g=gen):
+        def _thread(a=artist, eid=exclude_id, g=gen, banned=banned):
             try:
                 resp = api_get(API_URL, params={"tags": a, "limit": self.NUM_THUMBNAILS + 2})
                 if resp.status_code != 200:
                     self._thumb_q.put((g, "done", 0, None, None))
                     return
-                candidates = [
-                    p for p in resp.json().get("posts", [])
-                    if p.get("id") != eid
-                    and p.get("file", {}).get("ext", "") in (
-                        "jpg", "jpeg", "png", "gif", "bmp", "webp")
-                ]
+                candidates = []
+                for p in resp.json().get("posts", []):
+                    if p.get("id") == eid:
+                        continue
+                    if p.get("file", {}).get("ext", "") not in (
+                            "jpg", "jpeg", "png", "gif", "bmp", "webp"):
+                        continue
+                    hit = {t for ts in p.get("tags", {}).values() for t in ts} & banned
+                    if hit:
+                        log.info("Skipping more-by-artist post %s — banned: %s",
+                                 p.get("id"), ", ".join(hit))
+                        continue
+                    candidates.append(p)
                 loaded = 0
                 for p in candidates:
                     if loaded >= self.NUM_THUMBNAILS:
