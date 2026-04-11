@@ -97,32 +97,47 @@ def load_artists():
     log.info("Loaded %d followed and %d ignored artists", len(followed), len(ignored))
     return followed, ignored
 
-def add_followed_artist(artist):
-    """Insert an artist into the followed_artists table."""
-    conn = get_db()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-    conn.commit()
-    conn.close()
-    log.info("DB write: added '%s' to followed_artists", artist)
+def add_followed_artist(artist) -> bool:
+    """Insert an artist into the followed_artists table. Returns True on success."""
+    try:
+        conn = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
+        conn.commit()
+        conn.close()
+        log.info("DB write: added '%s' to followed_artists", artist)
+        return True
+    except Exception as e:
+        log.error("DB error adding followed artist '%s': %s", artist, e)
+        return False
 
-def add_ignored_artist(artist):
-    """Insert an artist into the ignored_artists table."""
-    conn = get_db()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-    conn.commit()
-    conn.close()
-    log.info("DB write: added '%s' to ignored_artists", artist)
+def add_ignored_artist(artist) -> bool:
+    """Insert an artist into the ignored_artists table. Returns True on success."""
+    try:
+        conn = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
+        conn.commit()
+        conn.close()
+        log.info("DB write: added '%s' to ignored_artists", artist)
+        return True
+    except Exception as e:
+        log.error("DB error adding ignored artist '%s': %s", artist, e)
+        return False
 
-def add_banned_tag(tag):
-    """Insert a tag into the banned_tags table."""
-    conn = get_db()
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
-    conn.commit()
-    conn.close()
-    log.info("DB write: added '%s' to banned_tags", tag)
+def add_banned_tag(tag) -> bool:
+    """Insert a tag into the banned_tags table. Returns True on success."""
+    try:
+        conn = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
+        conn.commit()
+        conn.close()
+        log.info("DB write: added '%s' to banned_tags", tag)
+        return True
+    except Exception as e:
+        log.error("DB error adding banned tag '%s': %s", tag, e)
+        return False
 
 def load_banned_tags():
     """Load banned tags list from the database."""
@@ -342,9 +357,9 @@ class E621DiscoveryApp:
         self._perform_search()
 
     def _ban_tag(self, tag: str):
-        add_banned_tag(tag)
         if tag not in self.banned_tags:
-            self.banned_tags.append(tag)
+            if add_banned_tag(tag):
+                self.banned_tags.append(tag)
 
     def _artist(self) -> str:
         return (self.current_post.get("tags", {}).get("artist") or ["Unknown"])[0]
@@ -473,16 +488,16 @@ class E621DiscoveryApp:
     def _follow(self):
         artist = self._artist()
         if artist not in self.followed_artists:
-            self.followed_artists.append(artist)
-            add_followed_artist(artist)
+            if add_followed_artist(artist):
+                self.followed_artists.append(artist)
         log.info("Followed artist '%s'", artist)
         self._advance()
 
     def _ignore(self):
         artist = self._artist()
         if artist not in self.ignored_artists:
-            self.ignored_artists.append(artist)
-            add_ignored_artist(artist)
+            if add_ignored_artist(artist):
+                self.ignored_artists.append(artist)
         log.info("Ignored artist '%s'", artist)
         self._advance()
 
