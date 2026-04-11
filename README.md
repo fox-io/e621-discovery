@@ -1,20 +1,26 @@
 # e621-discovery
 
-A desktop tool for discovering new artists on [e621.net](https://e621.net). It fetches posts from the e621 API, displays them one at a time, and lets you curate artists and tags you care about — all persisted to a local SQLite database.
+A desktop tool for discovering new artists on [e621.net](https://e621.net). It fetches posts from the e621 API, displays them one at a time in a persistent window, and lets you curate artists and tags — all persisted to a local SQLite database.
 
 ## Features
 
+- Persistent single window — updates in place as you browse; no per-post window creation
 - Browse posts filtered by one or more space-separated tags (negation with `-tag` supported)
 - **Follow** ❤️, **Ignore** 🚫, or **Skip** ⏭️ each artist
 - Followed and ignored artists are filtered out in future sessions
-- Ban specific tags — posts containing banned tags are silently skipped
-- View all tags on the current post with one-click shortcuts to add them to the search or ban them
-- See up to 3 thumbnails of the artist's other posts, loaded in the background
+- Ban specific tags (🚫 next to any tag) — posts containing banned tags are silently skipped
+- Post buffer pre-fetched in the background so the next image loads without waiting for an API call
+- Main image scaled to fit 800×600, letterboxed with the window background colour
+- Scrollable tag list for the current post with per-tag 🔍 (add to search) and 🚫 (ban) controls
+- Up to 25 of the artist's other posts shown as 100×100 thumbnails, loaded asynchronously; paginated with `<<` / `>>` if more than 5 are available
+- Thumbnails also filtered against banned tags
+- Clicking a thumbnail swaps it with the main image
 - Random or sequential post ordering
+- On exit, a clean list of artists followed during the session is printed to the terminal
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Dependencies listed in `requirements.txt`
 
 ## Setup
@@ -27,12 +33,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Before running, update the `User-Agent` string near the top of `e621-discovery.py` with your e621 username, as required by the e621 API rules:
+Copy the example config and fill in your e621 username (required by the e621 API rules):
 
-```python
-HEADERS = {
-    "User-Agent": "e621 Discovery Script by YourUsername"
-}
+```bash
+cp config.json.example config.json
+# edit config.json and replace <your_username>
 ```
 
 ## Usage
@@ -50,8 +55,10 @@ python e621-discovery.py
 | 🚫 | Ignore the artist (persisted, filtered in future runs) |
 | ⏭️ | Skip this post |
 | 🔍 / Enter | Search by tag(s) |
-| `+` next to tag | Add tag to search and trigger search |
-| `-` next to tag | Ban tag (posts with this tag will be skipped) |
+| 🔍 next to tag | Add tag to search and immediately search |
+| 🚫 next to tag | Ban tag (posts with this tag will be skipped from now on) |
+| `<<` / `>>` | Page through the artist's other posts in the thumbnail column |
+| Thumbnail click | Swap thumbnail with the main image |
 | Quit | Exit the application |
 
 ### Tag Search
