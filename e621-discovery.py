@@ -661,9 +661,9 @@ class E621DiscoveryApp:
     def _poll(self):
         self._bg_threads = [t for t in self._bg_threads if t.is_alive()]
 
-        # Batch-fetch callbacks
+        # Batch-fetch callbacks (capped to avoid blocking the UI thread)
         try:
-            while True:
+            for _ in range(10):
                 cb = self._ui_q.get_nowait()
                 try:
                     cb()
@@ -674,7 +674,7 @@ class E621DiscoveryApp:
 
         # Image download results
         try:
-            while True:
+            for _ in range(10):
                 g, post, pil = self._image_q.get_nowait()
                 if g != self._post_gen:
                     continue
@@ -698,7 +698,7 @@ class E621DiscoveryApp:
 
         # Thumbnail results
         try:
-            while True:
+            for _ in range(10):
                 item = self._thumb_q.get_nowait()
                 lid, kind = item[0], item[1]
                 if lid != self._thumb_load_id:
@@ -723,7 +723,7 @@ class E621DiscoveryApp:
 
         # Swap results
         try:
-            while True:
+            for _ in range(10):
                 g, pil, cp, pp = self._swap_q.get_nowait()
                 if g != self._post_gen:
                     continue
