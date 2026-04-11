@@ -157,13 +157,13 @@ class E621DiscoveryApp:
     """Single persistent window that updates in place for each post."""
 
     NUM_THUMBNAILS = 5
-    IMG_MAX = (800, 800)
+    IMG_MAX = (800, 600)
     THUMB_MAX = (100, 100)
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("e621 Discovery")
-        self.root.geometry("+0+0")
+        self.root.geometry("1175x650+0+0")
         self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
 
         # Persistent session state
@@ -192,6 +192,8 @@ class E621DiscoveryApp:
         self._bg_threads: list = []
 
         self._build_ui()
+        r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
+        self._bg_color = (r >> 8, g >> 8, b >> 8)
         self._ph_main, self._ph_thumb = self._make_placeholders()
         self.root.after(50, self._poll)
         self._advance()  # kick off the first post
@@ -255,15 +257,23 @@ class E621DiscoveryApp:
             lbl.pack(pady=(0, 4))
             self._thumb_labels.append(lbl)
 
-        self._img_label = tk.Label(self.root)
+        self._img_label = tk.Label(self.root, width=800, height=600)
         self._img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
 
     # ──────────────────────────────────────────────────── helpers
 
+    def _fit_image(self, pil: Image.Image) -> Image.Image:
+        """Scale pil to fit within IMG_MAX maintaining aspect ratio, centered on bg canvas."""
+        pil = pil.copy()
+        pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", self.IMG_MAX, self._bg_color)
+        canvas.paste(pil, ((self.IMG_MAX[0] - pil.width) // 2,
+                           (self.IMG_MAX[1] - pil.height) // 2))
+        return canvas
+
     def _make_placeholders(self):
         """Create and return (main_placeholder, thumb_placeholder) as PhotoImages."""
-        r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
-        bg = (r >> 8, g >> 8, b >> 8)
+        bg = self._bg_color
         border = (150, 150, 150)
         text_color = (80, 80, 80)
         # 800x600 main placeholder with centred "Loading..." text and 1px border
@@ -284,7 +294,7 @@ class E621DiscoveryApp:
 
     def _set_loading(self):
         self._artist_label.config(text="Artist: \u2014")
-        self._img_label.config(image=self._ph_main, text="", width=0, height=0)
+        self._img_label.config(image=self._ph_main, text="")
         for w in self._tag_inner.winfo_children():
             w.destroy()
         self._reset_thumbnails()
@@ -522,7 +532,7 @@ class E621DiscoveryApp:
         self.thumb_post_map[slot_idx] = self.current_post
         prev_post = self.current_post
         self.current_post = clicked
-        self._img_label.config(image=self._ph_main, text="", width=0, height=0)
+        self._img_label.config(image=self._ph_main, text="")
         gen = self._post_gen
 
         def _thread(u=url, cp=clicked, pp=prev_post, g=gen):
@@ -570,10 +580,11 @@ class E621DiscoveryApp:
                     continue
                 artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
                 self._artist_label.config(text=f"Artist: {artist}")
-                tk_img = ImageTk.PhotoImage(pil)
-                self._img_label.config(image=tk_img, text="", width=0, height=0)
+                fitted = self._fit_image(pil)
+                tk_img = ImageTk.PhotoImage(fitted)
+                self._img_label.config(image=tk_img, text="")
                 self._tk_img = tk_img
-                self.current_img = pil
+                self.current_img = pil  # store original (unpadded) for thumbnail swaps
                 self.current_post = post
                 self._build_tag_list(post)
                 self._reset_thumbnails()
@@ -611,10 +622,11 @@ class E621DiscoveryApp:
                 if g != self._post_gen:
                     continue
                 if pil is not None:
-                    tk_img = ImageTk.PhotoImage(pil)
-                    self._img_label.config(image=tk_img, text="", width=0, height=0)
+                    fitted = self._fit_image(pil)
+                    tk_img = ImageTk.PhotoImage(fitted)
+                    self._img_label.config(image=tk_img, text="")
                     self._tk_img = tk_img
-                    self.current_img = pil
+                    self.current_img = pil  # store original (unpadded) for thumbnail swaps
                     self._build_tag_list(cp)
                 else:
                     self.current_post = pp
