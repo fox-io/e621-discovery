@@ -198,6 +198,9 @@ class E621DiscoveryApp:
         self.thumb_images: list = [] # keeps thumbnail PhotoImages alive
         self.thumb_post_map: list = [None] * self.NUM_THUMBNAILS
         self._post_gen = 0           # incremented each time we start loading a new post
+        self._thumb_candidates: list = []  # all filtered candidates for current artist
+        self._thumb_page: int = 0          # current thumbnail page (0-indexed)
+        self._thumb_load_id: int = 0       # invalidated on every new load or page change
 
         # Thread-to-main queues (threads put plain Python data only)
         self._ui_q: queue.Queue = queue.Queue()       # callbacks from batch fetch
@@ -266,6 +269,14 @@ class E621DiscoveryApp:
         mid = tk.Frame(self.root)
         mid.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
         tk.Label(mid, text="More by artist").pack(anchor="w", pady=(0, 4))
+        nav = tk.Frame(mid)
+        nav.pack(anchor="w", pady=(0, 4))
+        self._thumb_prev_btn = tk.Button(nav, text="<<", state="disabled", fg="grey",
+                                         command=self._prev_thumb_page)
+        self._thumb_prev_btn.pack(side="left", padx=(0, 4))
+        self._thumb_next_btn = tk.Button(nav, text=">>", state="disabled", fg="grey",
+                                         command=self._next_thumb_page)
+        self._thumb_next_btn.pack(side="left")
         self._thumb_labels: list = []
         for _ in range(self.NUM_THUMBNAILS):
             lbl = tk.Label(mid, width=100, height=100)
@@ -320,12 +331,42 @@ class E621DiscoveryApp:
             w.destroy()
         self._reset_thumbnails()
 
-    def _reset_thumbnails(self):
+    def _clear_thumb_slots(self):
+        """Reset the visual thumbnail slots to loading placeholders (used by pagination)."""
         self.thumb_images.clear()
         self.thumb_post_map = [None] * self.NUM_THUMBNAILS
         for lbl in self._thumb_labels:
             lbl.config(image=self._ph_thumb, text="", cursor="")
             lbl.unbind("<Button-1>")
+
+    def _reset_thumbnails(self):
+        """Full reset: clear candidates, page state, slots, and nav buttons."""
+        self._thumb_candidates = []
+        self._thumb_page = 0
+        self._thumb_load_id += 1
+        self._clear_thumb_slots()
+        self._update_thumb_nav()
+
+    def _update_thumb_nav(self):
+        can_prev = self._thumb_page > 0
+        can_next = (self._thumb_page + 1) * self.NUM_THUMBNAILS < len(self._thumb_candidates)
+        for btn, enabled in ((self._thumb_prev_btn, can_prev), (self._thumb_next_btn, can_next)):
+            btn.config(state="normal" if enabled else "disabled",
+                       fg="black" if enabled else "grey")
+
+    def _prev_thumb_page(self):
+        if self._thumb_page > 0:
+            self._thumb_page -= 1
+            self._thumb_load_id += 1
+            self._update_thumb_nav()
+            self._load_thumb_page(self._thumb_page)
+
+    def _next_thumb_page(self):
+        if (self._thumb_page + 1) * self.NUM_THUMBNAILS < len(self._thumb_candidates):
+            self._thumb_page += 1
+            self._thumb_load_id += 1
+            self._update_thumb_nav()
+            self._load_thumb_page(self._thumb_page)
 
     def _build_tag_list(self, post_data: dict):
         for w in self._tag_inner.winfo_children():
@@ -444,49 +485,68 @@ class E621DiscoveryApp:
         t.start()
 
     def _start_thumbnail_load(self, artist: str, exclude_id):
-        gen = self._post_gen
-        banned = frozenset(self.banned_tags)  # snapshot at dispatch time
+        """Phase 1: fetch all filtered candidates in background, then kick off page 0."""
+        self._thumb_load_id += 1
+        load_id = self._thumb_load_id
+        banned = frozenset(self.banned_tags)
 
-        def _thread(a=artist, eid=exclude_id, g=gen, banned=banned):
+        def _thread(a=artist, eid=exclude_id, lid=load_id, b=banned):
+            candidates: list = []
             try:
-                resp = api_get(API_URL, params={"tags": a, "limit": self.NUM_THUMBNAILS + 2})
-                if resp.status_code != 200:
-                    self._thumb_q.put((g, "done", 0, None, None))
-                    return
-                candidates = []
-                for p in resp.json().get("posts", []):
-                    if p.get("id") == eid:
-                        continue
-                    if p.get("file", {}).get("ext", "") not in (
-                            "jpg", "jpeg", "png", "gif", "bmp", "webp"):
-                        continue
-                    hit = {t for ts in p.get("tags", {}).values() for t in ts} & banned
-                    if hit:
-                        log.info("Skipping more-by-artist post %s — banned: %s",
-                                 p.get("id"), ", ".join(hit))
-                        continue
-                    candidates.append(p)
-                loaded = 0
-                for p in candidates:
-                    if loaded >= self.NUM_THUMBNAILS:
-                        break
-                    preview_url = p.get("preview", {}).get("url")
-                    if not preview_url:
-                        continue
-                    try:
-                        r = requests.get(preview_url, headers=HEADERS, timeout=5)
-                        if r.status_code != 200:
+                resp = api_get(API_URL, params={"tags": a, "limit": 25})
+                if resp.status_code == 200:
+                    for p in resp.json().get("posts", []):
+                        if p.get("id") == eid:
                             continue
-                        thumb = Image.open(BytesIO(r.content))
-                        thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
-                        self._thumb_q.put((g, "thumb", loaded, p, thumb))
-                        loaded += 1
-                    except Exception:
-                        continue
-                self._thumb_q.put((g, "done", loaded, None, None))
+                        if p.get("file", {}).get("ext", "") not in (
+                                "jpg", "jpeg", "png", "gif", "bmp", "webp"):
+                            continue
+                        hit = {t for ts in p.get("tags", {}).values() for t in ts} & b
+                        if hit:
+                            log.info("Skipping more-by-artist post %s — banned: %s",
+                                     p.get("id"), ", ".join(hit))
+                            continue
+                        candidates.append(p)
             except Exception as ex:
-                log.warning("Thumbnail load failed: %s", ex)
-                self._thumb_q.put((g, "done", 0, None, None))
+                log.warning("Thumbnail candidate fetch failed: %s", ex)
+
+            def _on_main():
+                if lid != self._thumb_load_id:
+                    return  # stale
+                self._thumb_candidates = candidates
+                self._thumb_page = 0
+                self._update_thumb_nav()
+                self._load_thumb_page(0)
+            self._ui_q.put(_on_main)
+
+        t = threading.Thread(target=_thread, daemon=True)
+        self._bg_threads.append(t)
+        t.start()
+
+    def _load_thumb_page(self, page: int):
+        """Phase 2: download preview images for one page of _thumb_candidates."""
+        self._clear_thumb_slots()
+        lid = self._thumb_load_id
+        start = page * self.NUM_THUMBNAILS
+        page_posts = self._thumb_candidates[start:start + self.NUM_THUMBNAILS]
+
+        def _thread(posts=page_posts, lid=lid):
+            for slot, p in enumerate(posts):
+                preview_url = p.get("preview", {}).get("url")
+                if not preview_url:
+                    self._thumb_q.put((lid, "fail", slot, None, None))
+                    continue
+                try:
+                    r = requests.get(preview_url, headers=HEADERS, timeout=5)
+                    if r.status_code != 200:
+                        self._thumb_q.put((lid, "fail", slot, None, None))
+                        continue
+                    thumb = Image.open(BytesIO(r.content))
+                    thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
+                    self._thumb_q.put((lid, "thumb", slot, p, thumb))
+                except Exception:
+                    self._thumb_q.put((lid, "fail", slot, None, None))
+            self._thumb_q.put((lid, "done", len(posts), None, None))
 
         t = threading.Thread(target=_thread, daemon=True)
         self._bg_threads.append(t)
@@ -626,14 +686,16 @@ class E621DiscoveryApp:
         try:
             while True:
                 item = self._thumb_q.get_nowait()
-                g, kind = item[0], item[1]
-                if g != self._post_gen:
+                lid, kind = item[0], item[1]
+                if lid != self._thumb_load_id:
                     continue
                 if kind == "done":
-                    loaded = item[2]
-                    for i in range(loaded, self.NUM_THUMBNAILS):
+                    # fill any remaining slots beyond what this page contained
+                    for i in range(item[2], self.NUM_THUMBNAILS):
                         self._thumb_labels[i].config(image=self._ph_thumb_none, text="")
-                else:
+                elif kind == "fail":
+                    self._thumb_labels[item[2]].config(image=self._ph_thumb_none, text="")
+                else:  # "thumb"
                     _, _, slot, p, pil_thumb = item
                     tk_thumb = ImageTk.PhotoImage(pil_thumb)
                     self._thumb_labels[slot].config(
