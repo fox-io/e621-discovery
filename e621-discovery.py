@@ -24,8 +24,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Constants
-API_URL = "https://e621.net/posts.json"
 _config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 try:
     with open(_config_path) as _f:
@@ -35,132 +33,145 @@ except FileNotFoundError:
 _e621_username = _config.get("e621_username", "")
 if not _e621_username or _e621_username == "<your_username>":
     raise SystemExit("Set e621_username in config.json before running.")
-HEADERS = {
-    "User-Agent": f"e621 Discovery Script by {_e621_username}"
-}
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
 
-# Shared session — reuses TCP connections and TLS handshakes across all requests.
-SESSION = requests.Session()
-SESSION.headers.update(HEADERS)
 
-_last_api_request = 0.0
+class DatabaseManager:
+    """Manages all SQLite database operations."""
 
-def api_get(url, stop_event=None, **kwargs):
-    """Rate-limited GET for e621 API endpoints (1 req/s).
-    Pass stop_event to allow the rate-limit sleep to be interrupted."""
-    global _last_api_request
-    elapsed = time.monotonic() - _last_api_request
-    if elapsed < 1.0:
-        remaining = 1.0 - elapsed
-        if stop_event:
-            if stop_event.wait(timeout=remaining):
-                raise InterruptedError("api_get aborted via stop_event")
+    def __init__(self, path: str):
+        self._path = path
+
+    def _connect(self):
+        conn = sqlite3.connect(self._path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def init(self):
+        log.info("Initializing database at %s", self._path)
+        with closing(self._connect()) as conn:
+            with conn:
+                conn.execute("""CREATE TABLE IF NOT EXISTS followed_artists (
+                    tag TEXT UNIQUE NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+                )""")
+                conn.execute("""CREATE TABLE IF NOT EXISTS ignored_artists (
+                    tag TEXT UNIQUE NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+                )""")
+                conn.execute("""CREATE TABLE IF NOT EXISTS banned_tags (
+                    tag TEXT UNIQUE NOT NULL,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+                )""")
+        log.info("Database initialized successfully")
+
+    def load_artists(self):
+        log.info("Loading artists from database")
+        with closing(self._connect()) as conn:
+            followed = [row[0] for row in conn.execute("SELECT tag FROM followed_artists").fetchall()]
+            ignored = [row[0] for row in conn.execute("SELECT tag FROM ignored_artists").fetchall()]
+        log.info("Loaded %d followed and %d ignored artists", len(followed), len(ignored))
+        return followed, ignored
+
+    def load_banned_tags(self):
+        with closing(self._connect()) as conn:
+            tags = [row[0] for row in conn.execute("SELECT tag FROM banned_tags").fetchall()]
+        log.info("Loaded %d banned tags", len(tags))
+        return tags
+
+    def add_followed_artist(self, artist) -> bool:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)",
+                        (artist, now))
+            log.info("DB write: added '%s' to followed_artists", artist)
+            return True
+        except Exception as e:
+            log.error("DB error adding followed artist '%s': %s", artist, e)
+            return False
+
+    def add_ignored_artist(self, artist) -> bool:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)",
+                        (artist, now))
+            log.info("DB write: added '%s' to ignored_artists", artist)
+            return True
+        except Exception as e:
+            log.error("DB error adding ignored artist '%s': %s", artist, e)
+            return False
+
+    def add_banned_tag(self, tag) -> bool:
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)",
+                        (tag, now))
+            log.info("DB write: added '%s' to banned_tags", tag)
+            return True
+        except Exception as e:
+            log.error("DB error adding banned tag '%s': %s", tag, e)
+            return False
+
+    def get_followed_since(self, since: str) -> list:
+        with closing(self._connect()) as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT tag FROM followed_artists WHERE timestamp >= ? ORDER BY timestamp",
+                (since,)
+            ).fetchall()]
+
+
+class E621Client:
+    """Handles all e621 API communication with rate limiting and connection pooling."""
+
+    API_URL = "https://e621.net/posts.json"
+    TAGS_URL = "https://e621.net/tags.json"
+
+    def __init__(self, username: str):
+        self._session = requests.Session()
+        self._session.headers.update({"User-Agent": f"e621 Discovery Script by {username}"})
+        self._last_request = 0.0
+
+    def api_get(self, url: str, stop_event=None, **kwargs) -> requests.Response:
+        """Rate-limited GET for e621 API endpoints (1 req/s)."""
+        elapsed = time.monotonic() - self._last_request
+        if elapsed < 1.0:
+            remaining = 1.0 - elapsed
+            if stop_event:
+                if stop_event.wait(timeout=remaining):
+                    raise InterruptedError("api_get aborted via stop_event")
+            else:
+                time.sleep(remaining)
+        if stop_event and stop_event.is_set():
+            raise InterruptedError("api_get aborted via stop_event")
+        self._last_request = time.monotonic()
+        return self._session.get(url, **kwargs)
+
+    def download(self, url: str, **kwargs) -> requests.Response:
+        """Non-rate-limited GET for CDN image/thumbnail downloads."""
+        return self._session.get(url, **kwargs)
+
+    def fetch_posts(self, tags: str = "", page: int = 1, random_order: bool = True) -> list:
+        if random_order:
+            combined = ("order:random " + tags).strip() if tags else "order:random"
         else:
-            time.sleep(remaining)
-    if stop_event and stop_event.is_set():
-        raise InterruptedError("api_get aborted via stop_event")
-    _last_api_request = time.monotonic()
-    return SESSION.get(url, **kwargs)
-
-def get_db():
-    """Return a connection to the SQLite database."""
-    log.debug("Opening database connection: %s", DB_PATH)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
-
-def init_db():
-    """Ensure tables exist (idempotent)."""
-    log.info("Initializing database at %s", DB_PATH)
-    with closing(get_db()) as conn:
-        with conn:
-            conn.execute("""CREATE TABLE IF NOT EXISTS followed_artists (
-                tag TEXT UNIQUE NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-            )""")
-            conn.execute("""CREATE TABLE IF NOT EXISTS ignored_artists (
-                tag TEXT UNIQUE NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-            )""")
-            conn.execute("""CREATE TABLE IF NOT EXISTS banned_tags (
-                tag TEXT UNIQUE NOT NULL,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-            )""")
-    log.info("Database initialized successfully")
-
-def load_artists():
-    """Load followed and ignored artist lists from the database."""
-    log.info("Loading artists from database")
-    with closing(get_db()) as conn:
-        followed = [row[0] for row in conn.execute("SELECT tag FROM followed_artists").fetchall()]
-        ignored = [row[0] for row in conn.execute("SELECT tag FROM ignored_artists").fetchall()]
-    log.info("Loaded %d followed and %d ignored artists", len(followed), len(ignored))
-    return followed, ignored
-
-def add_followed_artist(artist) -> bool:
-    """Insert an artist into the followed_artists table. Returns True on success."""
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        with closing(get_db()) as conn:
-            with conn:
-                conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-        log.info("DB write: added '%s' to followed_artists", artist)
-        return True
-    except Exception as e:
-        log.error("DB error adding followed artist '%s': %s", artist, e)
-        return False
-
-def add_ignored_artist(artist) -> bool:
-    """Insert an artist into the ignored_artists table. Returns True on success."""
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        with closing(get_db()) as conn:
-            with conn:
-                conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-        log.info("DB write: added '%s' to ignored_artists", artist)
-        return True
-    except Exception as e:
-        log.error("DB error adding ignored artist '%s': %s", artist, e)
-        return False
-
-def add_banned_tag(tag) -> bool:
-    """Insert a tag into the banned_tags table. Returns True on success."""
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        with closing(get_db()) as conn:
-            with conn:
-                conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
-        log.info("DB write: added '%s' to banned_tags", tag)
-        return True
-    except Exception as e:
-        log.error("DB error adding banned tag '%s': %s", tag, e)
-        return False
-
-def load_banned_tags():
-    """Load banned tags list from the database."""
-    with closing(get_db()) as conn:
-        tags = [row[0] for row in conn.execute("SELECT tag FROM banned_tags").fetchall()]
-    log.info("Loaded %d banned tags", len(tags))
-    return tags
-# Fetch posts from e621 API
-def fetch_posts(tags="", page=1, random_order=True):
-    if random_order:
-        combined_tags = ("order:random " + tags).strip() if tags else "order:random"
-    else:
-        combined_tags = tags
-    log.info("Fetching posts from API (tags=%r, page=%d, random=%s)", combined_tags, page, random_order)
-    params = {
-        "tags": combined_tags,
-        "page": page
-    }
-    response = api_get(API_URL, params=params)
-    if response.status_code == 200:
-        posts = response.json().get("posts", [])
-        log.info("Received %d posts", len(posts))
-        return posts
-    else:
-        log.error("Error fetching posts: HTTP %d", response.status_code)
+            combined = tags
+        log.info("Fetching posts (tags=%r, page=%d, random=%s)", combined, page, random_order)
+        resp = self.api_get(self.API_URL, params={"tags": combined, "page": page})
+        if resp.status_code == 200:
+            posts = resp.json().get("posts", [])
+            log.info("Received %d posts", len(posts))
+            return posts
+        log.error("Error fetching posts: HTTP %d", resp.status_code)
         return []
 # ──────────────────────────────────────────────────────────────────────────────
 # Single persistent window
@@ -173,15 +184,18 @@ class E621DiscoveryApp:
     THUMB_MAX = (100, 100)
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, db: DatabaseManager, client: E621Client):
         self.root = root
         self.root.title("e621 Discovery")
         self.root.geometry("1175x650+0+0")
         self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
 
+        self.db = db
+        self.client = client
+
         # Persistent session state
-        self.followed_artists, self.ignored_artists = load_artists()
-        self.banned_tags = load_banned_tags()
+        self.followed_artists, self.ignored_artists = db.load_artists()
+        self.banned_tags = db.load_banned_tags()
         self.current_tags = ""
         self.random_order = True
         self.page = 1
@@ -399,7 +413,7 @@ class E621DiscoveryApp:
 
     def _ban_tag(self, tag: str):
         if tag not in self.banned_tags:
-            if add_banned_tag(tag):
+            if self.db.add_banned_tag(tag):
                 self.banned_tags.append(tag)
 
     def _artist(self) -> str:
@@ -417,7 +431,7 @@ class E621DiscoveryApp:
     def _download_image(self, url: str, post: dict, gen: int) -> None:
         """Background thread: download and enqueue a post image."""
         try:
-            r = SESSION.get(url, timeout=30)
+            r = self.client.download(url, timeout=30)
             if r.status_code != 200:
                 self._image_q.put((gen, post, None))
                 return
@@ -470,7 +484,7 @@ class E621DiscoveryApp:
         self.page += 1
 
         def _thread():
-            posts = fetch_posts(tags=tags, page=page, random_order=rand)
+            posts = self.client.fetch_posts(tags=tags, page=page, random_order=rand)
             def _on_main():
                 if fgen != self._fetch_gen:
                     return  # search changed while fetch was in flight
@@ -493,7 +507,7 @@ class E621DiscoveryApp:
         def _thread(a=artist, eid=exclude_id, lid=load_id, b=banned):
             candidates: list = []
             try:
-                resp = api_get(API_URL, params={"tags": a, "limit": 25})
+                resp = self.client.api_get(self.client.API_URL, params={"tags": a, "limit": 25})
                 if resp.status_code == 200:
                     for p in resp.json().get("posts", []):
                         if p.get("id") == eid:
@@ -536,7 +550,7 @@ class E621DiscoveryApp:
                     self._thumb_q.put((lid, "fail", slot, None, None))
                     continue
                 try:
-                    r = SESSION.get(preview_url, timeout=5)
+                    r = self.client.download(preview_url, timeout=5)
                     if r.status_code != 200:
                         self._thumb_q.put((lid, "fail", slot, None, None))
                         continue
@@ -556,7 +570,7 @@ class E621DiscoveryApp:
     def _follow(self):
         artist = self._artist()
         if artist not in self.followed_artists:
-            if add_followed_artist(artist):
+            if self.db.add_followed_artist(artist):
                 self.followed_artists.append(artist)
         log.info("Followed artist '%s'", artist)
         self._advance()
@@ -564,7 +578,7 @@ class E621DiscoveryApp:
     def _ignore(self):
         artist = self._artist()
         if artist not in self.ignored_artists:
-            if add_ignored_artist(artist):
+            if self.db.add_ignored_artist(artist):
                 self.ignored_artists.append(artist)
         log.info("Ignored artist '%s'", artist)
         self._advance()
@@ -586,8 +600,8 @@ class E621DiscoveryApp:
             try:
                 invalid = []
                 for tag in tags:
-                    resp = api_get("https://e621.net/tags.json",
-                                   params={"search[name]": tag.lstrip("-")})
+                    resp = self.client.api_get(self.client.TAGS_URL,
+                                              params={"search[name]": tag.lstrip("-")})
                     if resp.status_code == 200:
                         if not resp.json():
                             invalid.append(tag)
@@ -627,7 +641,7 @@ class E621DiscoveryApp:
 
         def _thread(u=url, cp=clicked, pp=prev_post, g=gen):
             try:
-                r = SESSION.get(u, timeout=10)
+                r = self.client.download(u, timeout=10)
                 if r.status_code != 200:
                     self._swap_q.put((g, None, cp, pp))
                     return
@@ -728,17 +742,12 @@ class E621DiscoveryApp:
         self.root.after(50, self._poll)
 
 
-def shutdown(session_start: str):
+def _shutdown(db: DatabaseManager, session_start: str):
     log.info("Shutting down e621 Discovery")
-    with closing(get_db()) as conn:
-        rows = conn.execute(
-            "SELECT tag FROM followed_artists WHERE timestamp >= ? ORDER BY timestamp",
-            (session_start,)
-        ).fetchall()
+    rows = db.get_followed_since(session_start)
     if rows:
-        artists = [row[0] for row in rows]
         log.info("Artists followed this session:")
-        print("\n" + "\n".join(artists))
+        print("\n" + "\n".join(rows))
     else:
         log.info("No artists followed this session.")
 
@@ -746,10 +755,12 @@ def shutdown(session_start: str):
 def main():
     log.info("Starting e621 Discovery")
     session_start = datetime.now(timezone.utc).isoformat()
-    atexit.register(shutdown, session_start)
-    init_db()
+    db = DatabaseManager(DB_PATH)
+    db.init()
+    client = E621Client(_e621_username)
+    atexit.register(_shutdown, db, session_start)
     root = tk.Tk()
-    E621DiscoveryApp(root)
+    E621DiscoveryApp(root, db, client)
     root.mainloop()
 
 
