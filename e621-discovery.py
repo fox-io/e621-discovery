@@ -625,6 +625,7 @@ class E621DiscoveryApp:
         prev_post = self.current_post
         self.current_post = clicked
         self._img_label.config(image=self._ph_main, text="")
+        self._build_tag_list({})
         gen = self._post_gen
 
         def _thread(u=url, cp=clicked, pp=prev_post, g=gen):
