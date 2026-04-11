@@ -194,8 +194,6 @@ class E621DiscoveryApp:
         self._build_ui()
         self._ph_main, self._ph_thumb = self._make_placeholders()
         self.root.after(50, self._poll)
-        gc.collect()
-        gc.disable()
         self._advance()  # kick off the first post
 
     # ──────────────────────────────────────────────────── UI (built once)
