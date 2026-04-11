@@ -193,7 +193,7 @@ class E621DiscoveryApp:
 
         # Per-post display state
         self.current_post: dict = {}
-        self.current_img: Image.Image = None
+        self.current_img: Image.Image | None = None
         self._tk_img = None          # keeps main PhotoImage alive
         self.thumb_images: list = [] # keeps thumbnail PhotoImages alive
         self.thumb_post_map: list = [None] * self.NUM_THUMBNAILS
@@ -373,6 +373,20 @@ class E621DiscoveryApp:
         self.post_buffer.clear()
         self.page = 1
 
+    def _download_image(self, url: str, post: dict, gen: int) -> None:
+        """Background thread: download and enqueue a post image."""
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=30)
+            if r.status_code != 200:
+                self._image_q.put((gen, post, None))
+                return
+            pil = Image.open(BytesIO(r.content))
+            pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
+            self._image_q.put((gen, post, pil))
+        except Exception as ex:
+            log.warning("Image download failed: %s", ex)
+            self._image_q.put((gen, post, None))
+
     def _advance(self):
         """Pop the next valid post from the buffer and start loading its image."""
         while self.post_buffer:
@@ -397,21 +411,8 @@ class E621DiscoveryApp:
             self._set_loading()
             if len(self.post_buffer) < 5:
                 self._fetch_batch()
-
-            def _img_thread(u=url, p=post, g=gen):
-                try:
-                    r = requests.get(u, headers=HEADERS, timeout=30)
-                    if r.status_code != 200:
-                        self._image_q.put((g, p, None))
-                        return
-                    pil = Image.open(BytesIO(r.content))
-                    pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
-                    self._image_q.put((g, p, pil))
-                except Exception as ex:
-                    log.warning("Image download failed: %s", ex)
-                    self._image_q.put((g, p, None))
-
-            t = threading.Thread(target=_img_thread, daemon=True)
+            t = threading.Thread(
+                target=self._download_image, args=(url, post, gen), daemon=True)
             self._bg_threads.append(t)
             t.start()
             return
