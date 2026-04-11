@@ -9,6 +9,7 @@ import threading
 import queue
 import json
 import gc
+from contextlib import closing
 from datetime import datetime, timezone
 from PIL import Image, ImageDraw
 from io import BytesIO
@@ -72,42 +73,38 @@ def get_db():
 def init_db():
     """Ensure tables exist (idempotent)."""
     log.info("Initializing database at %s", DB_PATH)
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS followed_artists (
-        tag TEXT UNIQUE NOT NULL,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS ignored_artists (
-        tag TEXT UNIQUE NOT NULL,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS banned_tags (
-        tag TEXT UNIQUE NOT NULL,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
-    )""")
-    conn.commit()
-    conn.close()
+    with closing(get_db()) as conn:
+        with conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS followed_artists (
+                tag TEXT UNIQUE NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS ignored_artists (
+                tag TEXT UNIQUE NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS banned_tags (
+                tag TEXT UNIQUE NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+            )""")
     log.info("Database initialized successfully")
 
 def load_artists():
     """Load followed and ignored artist lists from the database."""
     log.info("Loading artists from database")
-    conn = get_db()
-    followed = [row[0] for row in conn.execute("SELECT tag FROM followed_artists").fetchall()]
-    ignored = [row[0] for row in conn.execute("SELECT tag FROM ignored_artists").fetchall()]
-    conn.close()
+    with closing(get_db()) as conn:
+        followed = [row[0] for row in conn.execute("SELECT tag FROM followed_artists").fetchall()]
+        ignored = [row[0] for row in conn.execute("SELECT tag FROM ignored_artists").fetchall()]
     log.info("Loaded %d followed and %d ignored artists", len(followed), len(ignored))
     return followed, ignored
 
 def add_followed_artist(artist) -> bool:
     """Insert an artist into the followed_artists table. Returns True on success."""
     try:
-        conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            with conn:
+                conn.execute("INSERT OR IGNORE INTO followed_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
         log.info("DB write: added '%s' to followed_artists", artist)
         return True
     except Exception as e:
@@ -117,11 +114,10 @@ def add_followed_artist(artist) -> bool:
 def add_ignored_artist(artist) -> bool:
     """Insert an artist into the ignored_artists table. Returns True on success."""
     try:
-        conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            with conn:
+                conn.execute("INSERT OR IGNORE INTO ignored_artists (tag, timestamp) VALUES (?, ?)", (artist, now))
         log.info("DB write: added '%s' to ignored_artists", artist)
         return True
     except Exception as e:
@@ -131,11 +127,10 @@ def add_ignored_artist(artist) -> bool:
 def add_banned_tag(tag) -> bool:
     """Insert a tag into the banned_tags table. Returns True on success."""
     try:
-        conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
-        conn.commit()
-        conn.close()
+        with closing(get_db()) as conn:
+            with conn:
+                conn.execute("INSERT OR IGNORE INTO banned_tags (tag, timestamp) VALUES (?, ?)", (tag, now))
         log.info("DB write: added '%s' to banned_tags", tag)
         return True
     except Exception as e:
@@ -144,9 +139,8 @@ def add_banned_tag(tag) -> bool:
 
 def load_banned_tags():
     """Load banned tags list from the database."""
-    conn = get_db()
-    tags = [row[0] for row in conn.execute("SELECT tag FROM banned_tags").fetchall()]
-    conn.close()
+    with closing(get_db()) as conn:
+        tags = [row[0] for row in conn.execute("SELECT tag FROM banned_tags").fetchall()]
     log.info("Loaded %d banned tags", len(tags))
     return tags
 # Fetch posts from e621 API
@@ -736,12 +730,11 @@ class E621DiscoveryApp:
 
 def shutdown(session_start: str):
     log.info("Shutting down e621 Discovery")
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT tag FROM followed_artists WHERE timestamp >= ? ORDER BY timestamp",
-        (session_start,)
-    ).fetchall()
-    conn.close()
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            "SELECT tag FROM followed_artists WHERE timestamp >= ? ORDER BY timestamp",
+            (session_start,)
+        ).fetchall()
     if rows:
         artists = [row[0] for row in rows]
         log.info("Artists followed this session:")
