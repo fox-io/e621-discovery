@@ -177,6 +177,7 @@ class E621DiscoveryApp:
     NUM_THUMBNAILS = 5
     IMG_MAX = (800, 600)
     THUMB_MAX = (100, 100)
+    ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
 
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -448,7 +449,7 @@ class E621DiscoveryApp:
                 continue
             url = post.get("file", {}).get("url")
             ext = post.get("file", {}).get("ext", "")
-            if not url or ext not in ("jpg", "jpeg", "png", "gif", "bmp", "webp"):
+            if not url or ext not in self.ALLOWED_EXTENSIONS:
                 continue
             # Valid post — start image download
             self._post_gen += 1
@@ -503,8 +504,7 @@ class E621DiscoveryApp:
                     for p in resp.json().get("posts", []):
                         if p.get("id") == eid:
                             continue
-                        if p.get("file", {}).get("ext", "") not in (
-                                "jpg", "jpeg", "png", "gif", "bmp", "webp"):
+                        if p.get("file", {}).get("ext", "") not in self.ALLOWED_EXTENSIONS:
                             continue
                         hit = {t for ts in p.get("tags", {}).values() for t in ts} & b
                         if hit:
