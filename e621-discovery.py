@@ -39,6 +39,10 @@ HEADERS = {
 }
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "e621-discovery.sqlite3")
 
+# Shared session — reuses TCP connections and TLS handshakes across all requests.
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
 _last_api_request = 0.0
 
 def api_get(url, stop_event=None, **kwargs):
@@ -56,8 +60,7 @@ def api_get(url, stop_event=None, **kwargs):
     if stop_event and stop_event.is_set():
         raise InterruptedError("api_get aborted via stop_event")
     _last_api_request = time.monotonic()
-    kwargs.setdefault("headers", HEADERS)
-    return requests.get(url, **kwargs)
+    return SESSION.get(url, **kwargs)
 
 def get_db():
     """Return a connection to the SQLite database."""
@@ -419,7 +422,7 @@ class E621DiscoveryApp:
     def _download_image(self, url: str, post: dict, gen: int) -> None:
         """Background thread: download and enqueue a post image."""
         try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
+            r = SESSION.get(url, timeout=30)
             if r.status_code != 200:
                 self._image_q.put((gen, post, None))
                 return
@@ -539,7 +542,7 @@ class E621DiscoveryApp:
                     self._thumb_q.put((lid, "fail", slot, None, None))
                     continue
                 try:
-                    r = requests.get(preview_url, headers=HEADERS, timeout=5)
+                    r = SESSION.get(preview_url, timeout=5)
                     if r.status_code != 200:
                         self._thumb_q.put((lid, "fail", slot, None, None))
                         continue
@@ -630,7 +633,7 @@ class E621DiscoveryApp:
 
         def _thread(u=url, cp=clicked, pp=prev_post, g=gen):
             try:
-                r = requests.get(u, headers=HEADERS, timeout=10)
+                r = SESSION.get(u, timeout=10)
                 if r.status_code != 200:
                     self._swap_q.put((g, None, cp, pp))
                     return
