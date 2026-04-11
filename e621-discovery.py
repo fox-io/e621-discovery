@@ -251,7 +251,7 @@ class E621DiscoveryApp:
         tk.Label(mid, text="More by artist").pack(anchor="w", pady=(0, 4))
         self._thumb_labels: list = []
         for _ in range(self.NUM_THUMBNAILS):
-            lbl = tk.Label(mid, text="")
+            lbl = tk.Label(mid, width=100, height=100)
             lbl.pack(pady=(0, 4))
             self._thumb_labels.append(lbl)
 
