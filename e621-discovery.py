@@ -270,7 +270,7 @@ class E621DiscoveryApp:
         self._artist_label.pack(anchor="w")
 
         af = tk.Frame(left)
-        af.pack(anchor="w", pady=2)
+        af.pack(anchor="center", pady=2)
         tk.Button(af, text="\u2764\ufe0f", command=self._follow).pack(side="left", padx=(0, 2))
         tk.Button(af, text="\U0001f6ab", command=self._ignore).pack(side="left", padx=(0, 2))
         tk.Button(af, text="\u23ed\ufe0f", command=self._skip).pack(side="left")
