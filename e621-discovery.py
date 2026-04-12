@@ -506,10 +506,20 @@ class E621DiscoveryApp:
 
         def _thread(a=artist, eid=exclude_id, lid=load_id, b=banned):
             candidates: list = []
+            page = 1
+            max_pages = 5   # cap: at most 5 rate-limited API calls
+            per_page = 25
             try:
-                resp = self.client.api_get(self.client.API_URL, params={"tags": a, "limit": 25})
-                if resp.status_code == 200:
-                    for p in resp.json().get("posts", []):
+                while len(candidates) < per_page and page <= max_pages:
+                    resp = self.client.api_get(
+                        self.client.API_URL,
+                        params={"tags": a, "limit": per_page, "page": page})
+                    if resp.status_code != 200:
+                        break
+                    raw = resp.json().get("posts", [])
+                    if not raw:
+                        break  # artist has no more posts
+                    for p in raw:
                         if p.get("id") == eid:
                             continue
                         if p.get("file", {}).get("ext", "") not in self.ALLOWED_EXTENSIONS:
@@ -520,6 +530,11 @@ class E621DiscoveryApp:
                                      p.get("id"), ", ".join(hit))
                             continue
                         candidates.append(p)
+                    if len(raw) < per_page:
+                        break  # reached the last page of this artist's posts
+                    page += 1
+            except InterruptedError:
+                pass  # stop_event fired during rate-limit sleep
             except Exception as ex:
                 log.warning("Thumbnail candidate fetch failed: %s", ex)
 
