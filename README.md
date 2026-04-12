@@ -51,9 +51,9 @@ python e621-discovery.py
 
 | Control | Action |
 |---|---|
-| ❤️ | Follow the artist (persisted, filtered in future runs) |
-| 🚫 | Ignore the artist (persisted, filtered in future runs) |
-| ⏭️ | Skip this post |
+| ❤️ / `F` | Follow the artist (persisted, filtered in future runs) |
+| 🚫 / `I` | Ignore the artist (persisted, filtered in future runs) |
+| ⏭️ / `S` | Skip this post |
 | 🔍 / Enter | Search by tag(s) |
 | 🔍 next to tag | Add tag to search and immediately search |
 || 🚫 next to tag | Toggle tag ban — banned tags show strikethrough; click again to unban |

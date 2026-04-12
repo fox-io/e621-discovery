@@ -275,6 +275,17 @@ class E621DiscoveryApp:
         tk.Button(af, text="\U0001f6ab", command=self._ignore).pack(side="left", padx=(0, 2))
         tk.Button(af, text="\u23ed\ufe0f", command=self._skip).pack(side="left")
 
+        def _action_key(event, action):
+            if not isinstance(event.widget, tk.Entry):
+                action()
+        
+        self.root.bind("<f>", lambda e: _action_key(e, self._follow))
+        self.root.bind("<F>", lambda e: _action_key(e, self._follow))
+        self.root.bind("<i>", lambda e: _action_key(e, self._ignore))
+        self.root.bind("<I>", lambda e: _action_key(e, self._ignore))
+        self.root.bind("<s>", lambda e: _action_key(e, self._skip))
+        self.root.bind("<S>", lambda e: _action_key(e, self._skip))
+
         tk.Label(left, text="Post Tags").pack(anchor="w", pady=(6, 0))
         # Quit pinned to bottom before the expanding tag frame
         tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(
