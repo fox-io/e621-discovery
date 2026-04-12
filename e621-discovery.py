@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from PIL import Image, ImageDraw
 from io import BytesIO
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import messagebox
 from PIL import ImageTk
 
@@ -222,6 +223,9 @@ class E621DiscoveryApp:
         self._bg_threads: list = []
 
         self._build_ui()
+        self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
+        self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
+        self._tag_text_labels: dict = {}
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
         self._ph_main, self._ph_thumb, self._ph_thumb_none = self._make_placeholders()
@@ -381,9 +385,11 @@ class E621DiscoveryApp:
             self._load_thumb_page(self._thumb_page)
 
     def _build_tag_list(self, post_data: dict):
+        self._tag_text_labels = {}
         for w in self._tag_inner.winfo_children():
             w.destroy()
         tags = sorted(t for ts in post_data.get("tags", {}).values() for t in ts)
+        banned_set = set(self.banned_tags)
         for tag in tags:
             row = tk.Frame(self._tag_inner)
             row.pack(fill="x", anchor="w", pady=0, ipady=0)
@@ -397,10 +403,15 @@ class E621DiscoveryApp:
             ban_lbl.pack(side="left", padx=(0, 3), pady=0)
             ban_lbl.bind("<Button-1>", lambda e, t=tag: self._ban_tag(t))
             ban_lbl.bind("<MouseWheel>", self._on_mousewheel)
-            lbl = tk.Label(row, text=tag, anchor="w", pady=0, font=("TkDefaultFont", 10))
+            is_banned = tag in banned_set
+            lbl = tk.Label(row, text=tag, anchor="w", pady=0,
+                           font=self._tag_strike_font if is_banned else self._tag_font)
+            if is_banned:
+                lbl.config(fg="grey")
             lbl.pack(side="left", pady=0)
             lbl.bind("<MouseWheel>", self._on_mousewheel)
             row.bind("<MouseWheel>", self._on_mousewheel)
+            self._tag_text_labels[tag] = lbl
         self._tag_canvas.configure(scrollregion=self._tag_canvas.bbox("all"))
 
     def _add_tag_to_search(self, tag: str):
@@ -415,6 +426,9 @@ class E621DiscoveryApp:
         if tag not in self.banned_tags:
             if self.db.add_banned_tag(tag):
                 self.banned_tags.append(tag)
+                lbl = self._tag_text_labels.get(tag)
+                if lbl:
+                    lbl.config(font=self._tag_strike_font, fg="grey")
 
     def _artist(self) -> str:
         return (self.current_post.get("tags", {}).get("artist") or ["Unknown"])[0]
