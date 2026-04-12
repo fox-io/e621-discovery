@@ -123,6 +123,17 @@ class DatabaseManager:
             log.error("DB error adding banned tag '%s': %s", tag, e)
             return False
 
+    def remove_banned_tag(self, tag) -> bool:
+        try:
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute("DELETE FROM banned_tags WHERE tag = ?", (tag,))
+            log.info("DB write: removed '%s' from banned_tags", tag)
+            return True
+        except Exception as e:
+            log.error("DB error removing banned tag '%s': %s", tag, e)
+            return False
+
     def get_followed_since(self, since: str) -> list:
         with closing(self._connect()) as conn:
             return [row[0] for row in conn.execute(
@@ -225,6 +236,9 @@ class E621DiscoveryApp:
         self._build_ui()
         self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
         self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
+        _tmp = tk.Label(self.root)
+        self._tag_default_fg: str = _tmp.cget("fg")
+        _tmp.destroy()
         self._tag_text_labels: dict = {}
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
@@ -423,10 +437,17 @@ class E621DiscoveryApp:
         self._perform_search()
 
     def _ban_tag(self, tag: str):
-        if tag not in self.banned_tags:
+        lbl = self._tag_text_labels.get(tag)
+        if tag in self.banned_tags:
+            # Unban
+            if self.db.remove_banned_tag(tag):
+                self.banned_tags.remove(tag)
+                if lbl:
+                    lbl.config(font=self._tag_font, fg=self._tag_default_fg)
+        else:
+            # Ban
             if self.db.add_banned_tag(tag):
                 self.banned_tags.append(tag)
-                lbl = self._tag_text_labels.get(tag)
                 if lbl:
                     lbl.config(font=self._tag_strike_font, fg="grey")
 
