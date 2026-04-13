@@ -370,6 +370,7 @@ class E621DiscoveryApp:
         self._img_label.config(image=self._ph_main, text="")
         for w in self._tag_inner.winfo_children():
             w.destroy()
+        self._tag_canvas.yview_moveto(0)
         self._reset_thumbnails()
 
     def _clear_thumb_slots(self):
@@ -413,6 +414,7 @@ class E621DiscoveryApp:
         self._tag_text_labels = {}
         for w in self._tag_inner.winfo_children():
             w.destroy()
+        self._tag_canvas.yview_moveto(0)
         tags = sorted(t for ts in post_data.get("tags", {}).values() for t in ts)
         banned_set = set(self.banned_tags)
         for tag in tags:
