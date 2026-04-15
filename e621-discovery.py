@@ -688,6 +688,12 @@ class E621DiscoveryApp:
         url = clicked.get("file", {}).get("url")
         if not url:
             return
+
+        # Disable thumbnail clicks until the new image is loaded
+        for lbl in self._thumb_labels:
+            lbl.unbind("<Button-1>")
+            lbl.config(cursor="")
+
         # Move current main image → thumbnail slot
         if self.current_img is not None:
             prev_thumb = self.current_img.copy()
@@ -799,6 +805,13 @@ class E621DiscoveryApp:
                     self._build_tag_list(cp)
                 else:
                     self.current_post = pp
+
+                # Re-enable thumbnail clicks
+                for i, post in enumerate(self.thumb_post_map):
+                    if post:
+                        lbl = self._thumb_labels[i]
+                        lbl.config(cursor="pointinghand")
+                        lbl.bind("<Button-1>", lambda e, idx=i: self._on_thumb_click(idx))
         except queue.Empty:
             pass
 
