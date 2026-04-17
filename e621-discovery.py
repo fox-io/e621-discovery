@@ -134,6 +134,28 @@ class DatabaseManager:
             log.error("DB error removing banned tag '%s': %s", tag, e)
             return False
 
+    def remove_followed_artist(self, artist) -> bool:
+        try:
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute("DELETE FROM followed_artists WHERE tag = ?", (artist,))
+            log.info("DB write: removed '%s' from followed_artists", artist)
+            return True
+        except Exception as e:
+            log.error("DB error removing followed artist '%s': %s", artist, e)
+            return False
+
+    def remove_ignored_artist(self, artist) -> bool:
+        try:
+            with closing(self._connect()) as conn:
+                with conn:
+                    conn.execute("DELETE FROM ignored_artists WHERE tag = ?", (artist,))
+            log.info("DB write: removed '%s' from ignored_artists", artist)
+            return True
+        except Exception as e:
+            log.error("DB error removing ignored artist '%s': %s", artist, e)
+            return False
+
     def get_followed_since(self, since: str) -> list:
         with closing(self._connect()) as conn:
             return [row[0] for row in conn.execute(
@@ -291,6 +313,8 @@ class E621DiscoveryApp:
         tk.Label(left, text="Post Tags").pack(anchor="w", pady=(6, 0))
         # Quit pinned to bottom before the expanding tag frame
         tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(side="bottom", anchor="w", pady=2)
+        tk.Button(left, text="Edit Artists", command=self._open_artist_editor).pack(
+            side="bottom", anchor="w", pady=(0, 2), fill="x")
         tk.Button(left, text="Banned Tags", command=self._open_banned_tags_editor).pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
         tf = tk.Frame(left)
@@ -767,6 +791,81 @@ class E621DiscoveryApp:
             if changes_made:
                 if self.current_post:
                     self._build_tag_list(self.current_post)
+            editor.destroy()
+
+        tk.Button(editor, text="Close", command=_on_close).pack(pady=10)
+        editor.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def _open_artist_editor(self):
+        editor = tk.Toplevel(self.root)
+        editor.title("Edit Artists")
+        editor.geometry("300x500")
+        editor.transient(self.root)
+        editor.grab_set()
+
+        tk.Label(editor, text="Edit Artists", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
+
+        list_frame = tk.Frame(editor)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        canvas = tk.Canvas(list_frame, highlightthickness=0)
+        sb = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner_frame = tk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        def _on_modal_mousewheel(event):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+        inner_frame.bind("<MouseWheel>", _on_modal_mousewheel)
+        canvas.bind("<MouseWheel>", _on_modal_mousewheel)
+
+        modal_artist_labels = {}
+
+        def _toggle_artist_status(artist: str):
+            label = modal_artist_labels[artist]
+            is_followed = artist in self.followed_artists
+            is_ignored = artist in self.ignored_artists
+
+            if is_followed:  # Followed -> Ignored
+                if self.db.remove_followed_artist(artist):
+                    try: self.followed_artists.remove(artist)
+                    except ValueError: pass
+                    if self.db.add_ignored_artist(artist):
+                        self.ignored_artists.append(artist)
+                        label.config(font=self._tag_strike_font, fg="grey")
+            elif is_ignored:  # Ignored -> Neither
+                if self.db.remove_ignored_artist(artist):
+                    try: self.ignored_artists.remove(artist)
+                    except ValueError: pass
+                    label.config(font=self._tag_font, fg=self._tag_default_fg)
+            else:  # Neither -> Followed
+                if self.db.add_followed_artist(artist):
+                    self.followed_artists.append(artist)
+                    label.config(font=self._tag_font, fg="green")
+
+        all_artists = sorted(list(set(self.followed_artists) | set(self.ignored_artists)))
+        for artist in all_artists:
+            row = tk.Frame(inner_frame)
+            row.pack(fill="x", anchor="w")
+            toggle_icon = tk.Label(row, text="\u267b", cursor="pointinghand", font=("TkDefaultFont", 9))
+            toggle_icon.pack(side="left", padx=(0, 3))
+            toggle_icon.bind("<Button-1>", lambda e, a=artist: _toggle_artist_status(a))
+
+            font, fg = self._tag_font, self._tag_default_fg
+            if artist in self.ignored_artists: font, fg = self._tag_strike_font, "grey"
+            elif artist in self.followed_artists: fg = "green"
+            artist_label = tk.Label(row, text=artist, anchor="w", font=font, fg=fg)
+            artist_label.pack(side="left")
+            modal_artist_labels[artist] = artist_label
+
+            for widget in (row, toggle_icon, artist_label):
+                widget.bind("<MouseWheel>", _on_modal_mousewheel)
+
+        def _on_close():
+            editor.grab_release()
             editor.destroy()
 
         tk.Button(editor, text="Close", command=_on_close).pack(pady=10)
