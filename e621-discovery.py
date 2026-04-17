@@ -225,11 +225,13 @@ class E621DiscoveryApp:
         self._thumb_candidates: list = []  # all filtered candidates for current artist
         self._thumb_page: int = 0          # current thumbnail page (0-indexed)
         self._thumb_load_id: int = 0       # invalidated on every new load or page change
+        self._thumb_slot_idx: int = 0      # next available thumbnail slot
+        self._thumb_next_candidate_idx: int = 0
 
         # Thread-to-main queues (threads put plain Python data only)
         self._ui_q: queue.Queue = queue.Queue()       # callbacks from batch fetch
         self._image_q: queue.Queue = queue.Queue()    # (gen, post, PIL|None)
-        self._thumb_q: queue.Queue = queue.Queue()    # (gen, kind, slot, post|None, PIL|None)
+        self._thumb_q: queue.Queue = queue.Queue()    # (gen, kind, post|None, PIL|None)
         self._swap_q: queue.Queue = queue.Queue()     # (gen, PIL|None, clicked_post, prev_post)
         self._bg_threads: list = []
 
@@ -377,6 +379,7 @@ class E621DiscoveryApp:
         """Reset the visual thumbnail slots to loading placeholders (used by pagination)."""
         self.thumb_images.clear()
         self.thumb_post_map = [None] * self.NUM_THUMBNAILS
+        self._thumb_slot_idx = 0
         for lbl in self._thumb_labels:
             lbl.config(image=self._ph_thumb, text="", cursor="")
             lbl.unbind("<Button-1>")
@@ -386,6 +389,7 @@ class E621DiscoveryApp:
         self._thumb_candidates = []
         self._thumb_page = 0
         self._thumb_load_id += 1
+        self._thumb_next_candidate_idx = 0
         self._clear_thumb_slots()
         self._update_thumb_nav()
 
@@ -600,29 +604,45 @@ class E621DiscoveryApp:
         t.start()
 
     def _load_thumb_page(self, page: int):
-        """Phase 2: download preview images for one page of _thumb_candidates."""
+        """Phase 2: Start the process of filling thumbnail slots for a given page."""
         self._clear_thumb_slots()
-        lid = self._thumb_load_id
-        start = page * self.NUM_THUMBNAILS
-        page_posts = self._thumb_candidates[start:start + self.NUM_THUMBNAILS]
+        self._thumb_next_candidate_idx = page * self.NUM_THUMBNAILS
+        self._fetch_thumb_batch()
 
-        def _thread(posts=page_posts, lid=lid):
-            for slot, p in enumerate(posts):
+    def _fetch_thumb_batch(self):
+        """Fetch a batch of thumbnail candidates to try and fill remaining slots."""
+        needed = self.NUM_THUMBNAILS - self._thumb_slot_idx
+        if needed <= 0:
+            return
+
+        start = self._thumb_next_candidate_idx
+        posts_to_try = self._thumb_candidates[start : start + needed]
+
+        if not posts_to_try:
+            for i in range(self._thumb_slot_idx, self.NUM_THUMBNAILS):
+                self._thumb_labels[i].config(image=self._ph_thumb_none, text="")
+            return
+
+        self._thumb_next_candidate_idx += len(posts_to_try)
+        lid = self._thumb_load_id
+
+        def _thread(posts=posts_to_try, lid=lid):
+            for p in posts:
                 preview_url = p.get("preview", {}).get("url")
                 if not preview_url:
-                    self._thumb_q.put((lid, "fail", slot, None, None))
+                    self._thumb_q.put((lid, "fail", p, None))
                     continue
                 try:
                     r = self.client.download(preview_url, timeout=5)
                     if r.status_code != 200:
-                        self._thumb_q.put((lid, "fail", slot, None, None))
+                        self._thumb_q.put((lid, "fail", p, None))
                         continue
                     thumb = Image.open(BytesIO(r.content))
                     thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
-                    self._thumb_q.put((lid, "thumb", slot, p, thumb))
+                    self._thumb_q.put((lid, "thumb", p, thumb))
                 except Exception:
-                    self._thumb_q.put((lid, "fail", slot, None, None))
-            self._thumb_q.put((lid, "done", len(posts), None, None))
+                    self._thumb_q.put((lid, "fail", p, None))
+            self._thumb_q.put((lid, "batch_done", None, None))
 
         t = threading.Thread(target=_thread, daemon=True)
         self._bg_threads.append(t)
@@ -772,21 +792,32 @@ class E621DiscoveryApp:
                 lid, kind = item[0], item[1]
                 if lid != self._thumb_load_id:
                     continue
-                if kind == "done":
-                    # fill any remaining slots beyond what this page contained
-                    for i in range(item[2], self.NUM_THUMBNAILS):
-                        self._thumb_labels[i].config(image=self._ph_thumb_none, text="")
+                if kind == "thumb":
+                    if self._thumb_slot_idx < self.NUM_THUMBNAILS:
+                        slot = self._thumb_slot_idx
+                        _, _, p, pil_thumb = item
+                        tk_thumb = ImageTk.PhotoImage(pil_thumb)
+                        self._thumb_labels[slot].config(
+                            image=tk_thumb, text="", cursor="pointinghand")
+                        self.thumb_images.append(tk_thumb)
+                        self.thumb_post_map[slot] = p
+                        self._thumb_labels[slot].bind(
+                            "<Button-1>", lambda e, idx=slot: self._on_thumb_click(idx))
+                        self._thumb_slot_idx += 1
                 elif kind == "fail":
-                    self._thumb_labels[item[2]].config(image=self._ph_thumb_none, text="")
-                else:  # "thumb"
-                    _, _, slot, p, pil_thumb = item
-                    tk_thumb = ImageTk.PhotoImage(pil_thumb)
-                    self._thumb_labels[slot].config(
-                        image=tk_thumb, text="", cursor="pointinghand")
-                    self.thumb_images.append(tk_thumb)
-                    self.thumb_post_map[slot] = p
-                    self._thumb_labels[slot].bind(
-                        "<Button-1>", lambda e, idx=slot: self._on_thumb_click(idx))
+                    _, _, p, _ = item
+                    if p:
+                        try:
+                            idx = self._thumb_candidates.index(p)
+                            self._thumb_candidates.pop(idx)
+                            self._thumb_candidates.append(p)
+                            if self._thumb_next_candidate_idx > idx:
+                                self._thumb_next_candidate_idx -= 1
+                        except ValueError:
+                            pass  # Post not in list, shouldn't happen
+                elif kind == "batch_done":
+                    if self._thumb_slot_idx < self.NUM_THUMBNAILS:
+                        self._fetch_thumb_batch()
         except queue.Empty:
             pass
 
