@@ -290,11 +290,11 @@ class E621DiscoveryApp:
 
         tk.Label(left, text="Post Tags").pack(anchor="w", pady=(6, 0))
         # Quit pinned to bottom before the expanding tag frame
-        tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(
-            side="bottom", anchor="w", pady=2)
-        tk.Frame(left, height=10).pack(side="bottom")
+        tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(side="bottom", anchor="w", pady=2)
+        tk.Button(left, text="Banned Tags", command=self._open_banned_tags_editor).pack(
+            side="bottom", anchor="w", pady=(0, 2), fill="x")
         tf = tk.Frame(left)
-        tf.pack(fill="both", expand=True)
+        tf.pack(fill="both", expand=True, pady=(0, 5))
         self._tag_canvas = tk.Canvas(tf, width=200, highlightthickness=0)
         sb = tk.Scrollbar(tf, orient="vertical", command=self._tag_canvas.yview)
         self._tag_canvas.configure(yscrollcommand=sb.set)
@@ -700,6 +700,77 @@ class E621DiscoveryApp:
         self.current_tags = " ".join(tags)
         self._invalidate_search()
         self._advance()
+
+    def _open_banned_tags_editor(self):
+        editor = tk.Toplevel(self.root)
+        editor.title("Banned Tags")
+        editor.geometry("300x500")
+        editor.transient(self.root)
+        editor.grab_set()
+
+        tk.Label(editor, text="Banned Tags", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
+
+        list_frame = tk.Frame(editor)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        canvas = tk.Canvas(list_frame, highlightthickness=0)
+        sb = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner_frame = tk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        def _on_modal_mousewheel(event):
+            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+        inner_frame.bind("<MouseWheel>", _on_modal_mousewheel)
+        canvas.bind("<MouseWheel>", _on_modal_mousewheel)
+
+        modal_tag_labels = {}
+        changes_made = False
+
+        def _toggle_tag_ban(tag: str):
+            nonlocal changes_made
+            label = modal_tag_labels[tag]
+            if tag in self.banned_tags:
+                # Unban
+                if self.db.remove_banned_tag(tag):
+                    try: self.banned_tags.remove(tag)
+                    except ValueError: pass
+                    label.config(font=self._tag_font, fg=self._tag_default_fg)
+                    changes_made = True
+            else:
+                # Ban
+                if self.db.add_banned_tag(tag):
+                    self.banned_tags.append(tag)
+                    label.config(font=self._tag_strike_font, fg="grey")
+                    changes_made = True
+
+        for tag in sorted(self.banned_tags):
+            row = tk.Frame(inner_frame)
+            row.pack(fill="x", anchor="w")
+
+            ban_icon = tk.Label(row, text="\U0001f6ab", cursor="pointinghand", font=("TkDefaultFont", 7))
+            ban_icon.pack(side="left", padx=(0, 3))
+            ban_icon.bind("<Button-1>", lambda e, t=tag: _toggle_tag_ban(t))
+
+            tag_label = tk.Label(row, text=tag, anchor="w", font=self._tag_strike_font, fg="grey")
+            tag_label.pack(side="left")
+            modal_tag_labels[tag] = tag_label
+
+            for widget in (row, ban_icon, tag_label):
+                widget.bind("<MouseWheel>", _on_modal_mousewheel)
+
+        def _on_close():
+            editor.grab_release()
+            if changes_made:
+                if self.current_post:
+                    self._build_tag_list(self.current_post)
+            editor.destroy()
+
+        tk.Button(editor, text="Close", command=_on_close).pack(pady=10)
+        editor.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _on_thumb_click(self, slot_idx: int):
         clicked = self.thumb_post_map[slot_idx]
