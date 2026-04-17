@@ -315,7 +315,7 @@ class E621DiscoveryApp:
         tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(side="bottom", anchor="w", pady=2)
         tk.Button(left, text="Edit Artists", command=self._open_artist_editor).pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
-        tk.Button(left, text="Banned Tags", command=self._open_banned_tags_editor).pack(
+        tk.Button(left, text="Edit Tags", command=self._open_tags_editor).pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
         tf = tk.Frame(left)
         tf.pack(fill="both", expand=True, pady=(0, 5))
@@ -725,14 +725,14 @@ class E621DiscoveryApp:
         self._invalidate_search()
         self._advance()
 
-    def _open_banned_tags_editor(self):
+    def _open_tags_editor(self):
         editor = tk.Toplevel(self.root)
-        editor.title("Banned Tags")
+        editor.title("Edit Tags")
         editor.geometry("300x500")
         editor.transient(self.root)
         editor.grab_set()
 
-        tk.Label(editor, text="Banned Tags", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
+        tk.Label(editor, text="Edit Tags", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
 
         list_frame = tk.Frame(editor)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
