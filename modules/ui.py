@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageTk
 from modules.database import DatabaseManager
 from modules.api import E621Client
 from modules.components.thumbnail_gallery import ThumbnailGallery
+from modules.components.sidebar import Sidebar
 
 log = logging.getLogger(__name__)
 
@@ -71,64 +72,29 @@ class E621DiscoveryApp:
 
     def _build_ui(self):
         self.root.rowconfigure(0, weight=1)
-        left = tk.Frame(self.root)
-        left.grid(row=0, column=0, sticky="nsw", padx=10, pady=10)
 
-        self._random_state = [True]
-        self._random_cb = tk.Checkbutton(left, text="Random order",
-                                         command=self._on_random_toggle)
-        self._random_cb.select()
-        self._random_cb.pack(anchor="w", pady=(0, 5))
-
-        sf = tk.Frame(left)
-        sf.pack(anchor="w", pady=(0, 10))
-        self._search_entry = tk.Entry(sf, width=15)
-        self._search_entry.bind("<Return>", lambda e: self._perform_search())
-        self._search_entry.pack(side="left", padx=(0, 5))
-        tk.Button(sf, text="\U0001f50d", command=self._perform_search).pack(side="left")
-
-        self._artist_label = tk.Label(left, text="Artist: \u2014")
-        self._artist_label.pack(anchor="w")
-
-        af = tk.Frame(left)
-        af.pack(anchor="center", pady=2)
-        tk.Button(af, text="\u2764\ufe0f", command=self._follow).pack(side="left", padx=(0, 2))
-        tk.Button(af, text="\U0001f6ab", command=self._ignore).pack(side="left", padx=(0, 2))
-        tk.Button(af, text="\u23ed\ufe0f", command=self._skip).pack(side="left")
+        callbacks = {
+            "on_random_toggle": self._on_random_toggle,
+            "on_search": self._perform_search,
+            "on_follow": self._follow,
+            "on_ignore": self._ignore,
+            "on_skip": self._skip,
+            "on_edit_artists": self._open_artist_editor,
+            "on_edit_tags": self._open_tags_editor,
+        }
+        self.sidebar = Sidebar(self.root, callbacks)
+        self.sidebar.grid(row=0, column=0, sticky="nsw", padx=10, pady=10)
 
         def _action_key(event, action):
             if not isinstance(event.widget, tk.Entry):
                 action()
-        
+
         self.root.bind("<f>", lambda e: _action_key(e, self._follow))
         self.root.bind("<F>", lambda e: _action_key(e, self._follow))
         self.root.bind("<i>", lambda e: _action_key(e, self._ignore))
         self.root.bind("<I>", lambda e: _action_key(e, self._ignore))
         self.root.bind("<s>", lambda e: _action_key(e, self._skip))
         self.root.bind("<S>", lambda e: _action_key(e, self._skip))
-
-        tk.Label(left, text="Post Tags").pack(anchor="w", pady=(6, 0))
-        # Quit pinned to bottom before the expanding tag frame
-        tk.Button(left, text="Quit", width=10, command=lambda: sys.exit(0)).pack(side="bottom", anchor="w", pady=2)
-        tk.Button(left, text="Edit Artists", command=self._open_artist_editor).pack(
-            side="bottom", anchor="w", pady=(0, 2), fill="x")
-        tk.Button(left, text="Edit Tags", command=self._open_tags_editor).pack(
-            side="bottom", anchor="w", pady=(0, 2), fill="x")
-        tf = tk.Frame(left)
-        tf.pack(fill="both", expand=True, pady=(0, 5))
-        self._tag_canvas = tk.Canvas(tf, width=200, highlightthickness=0)
-        sb = tk.Scrollbar(tf, orient="vertical", command=self._tag_canvas.yview)
-        self._tag_canvas.configure(yscrollcommand=sb.set)
-        self._tag_canvas.pack(side="left", fill="both", expand=True)
-        sb.pack(side="left", fill="y")
-        self._tag_inner = tk.Frame(self._tag_canvas)
-        self._tag_canvas.create_window((0, 0), window=self._tag_inner, anchor="nw")
-        self._tag_inner.bind(
-            "<Configure>",
-            lambda e: self._tag_canvas.configure(
-                scrollregion=self._tag_canvas.bbox("all")))
-        self._tag_canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self._tag_inner.bind("<MouseWheel>", self._on_mousewheel)
 
         self.thumbnail_gallery = ThumbnailGallery(
             self.root, self.client, self._ph_thumb, self._ph_thumb_none,
@@ -174,54 +140,46 @@ class E621DiscoveryApp:
             return ImageTk.PhotoImage(img)
         return ImageTk.PhotoImage(main), _thumb_img("Loading..."), _thumb_img("None")
 
-    def _on_mousewheel(self, event):
-        self._tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-
     def _set_loading(self):
-        self._artist_label.config(text="Artist: \u2014")
+        self.sidebar.reset_artist()
         self._img_label.config(image=self._ph_main, text="")
-        for w in self._tag_inner.winfo_children():
-            w.destroy()
-        self._tag_canvas.yview_moveto(0)
+        self.sidebar.reset_tag_list()
         self.thumbnail_gallery.reset()
 
     def _build_tag_list(self, post_data: dict):
         self._tag_text_labels = {}
-        for w in self._tag_inner.winfo_children():
-            w.destroy()
-        self._tag_canvas.yview_moveto(0)
+        self.sidebar.reset_tag_list()
+        tag_inner = self.sidebar.get_tag_list_parent()
         tags = sorted(t for ts in post_data.get("tags", {}).values() for t in ts)
         banned_set = set(self.banned_tags)
         for tag in tags:
-            row = tk.Frame(self._tag_inner)
+            row = tk.Frame(tag_inner)
             row.pack(fill="x", anchor="w", pady=0, ipady=0)
             search_lbl = tk.Label(row, text="\U0001f50d", cursor="pointinghand",
                                    font=("TkDefaultFont", 7), pady=0)
             search_lbl.pack(side="left", padx=(0, 1), pady=0)
             search_lbl.bind("<Button-1>", lambda e, t=tag: self._add_tag_to_search(t))
-            search_lbl.bind("<MouseWheel>", self._on_mousewheel)
+
             ban_lbl = tk.Label(row, text="\U0001f6ab", cursor="pointinghand",
                                font=("TkDefaultFont", 7), pady=0)
             ban_lbl.pack(side="left", padx=(0, 3), pady=0)
             ban_lbl.bind("<Button-1>", lambda e, t=tag: self._ban_tag(t))
-            ban_lbl.bind("<MouseWheel>", self._on_mousewheel)
+
             is_banned = tag in banned_set
             lbl = tk.Label(row, text=tag, anchor="w", pady=0,
                            font=self._tag_strike_font if is_banned else self._tag_font)
             if is_banned:
                 lbl.config(fg="grey")
             lbl.pack(side="left", pady=0)
-            lbl.bind("<MouseWheel>", self._on_mousewheel)
-            row.bind("<MouseWheel>", self._on_mousewheel)
+
             self._tag_text_labels[tag] = lbl
-        self._tag_canvas.configure(scrollregion=self._tag_canvas.bbox("all"))
+        self.sidebar.tag_canvas.configure(scrollregion=self.sidebar.tag_canvas.bbox("all"))
 
     def _add_tag_to_search(self, tag: str):
-        existing = self._search_entry.get().strip().split()
+        existing = self.sidebar.get_search_query().strip().split()
         if tag not in existing:
             existing.append(tag)
-        self._search_entry.delete(0, tk.END)
-        self._search_entry.insert(0, " ".join(existing))
+        self.sidebar.set_search_query(" ".join(existing))
         self._perform_search()
 
     def _ban_tag(self, tag: str):
@@ -346,13 +304,12 @@ class E621DiscoveryApp:
         self._advance()
 
     def _on_random_toggle(self):
-        self._random_state[0] = not self._random_state[0]
-        self.random_order = self._random_state[0]
+        self.random_order = not self.random_order
         self._invalidate_search()
         self._advance()
 
     def _perform_search(self):
-        query = self._search_entry.get().strip()
+        query = self.sidebar.get_search_query().strip()
         tags = query.split() if query else []
         if tags:
             try:
@@ -588,7 +545,7 @@ class E621DiscoveryApp:
                     self.root.after(300, self._advance)
                     continue
                 artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
-                self._artist_label.config(text=f"Artist: {artist}")
+                self.sidebar.update_artist(artist)
                 fitted = self._fit_image(pil)
                 tk_img = ImageTk.PhotoImage(fitted)
                 self._img_label.config(image=tk_img, text="")
