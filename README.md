@@ -44,7 +44,7 @@ cp config.json.example config.json
 
 ```bash
 source venv/bin/activate
-python e621-discovery.py
+python main.py
 ```
 
 ### Controls
