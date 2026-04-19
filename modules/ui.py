@@ -173,6 +173,10 @@ class E621DiscoveryApp:
                 lbl.config(fg="grey")
             lbl.pack(side="left", pady=0)
 
+            # Bind mousewheel to all child widgets to ensure scrolling works
+            for widget in (row, search_lbl, ban_lbl, lbl):
+                widget.bind("<MouseWheel>", self.sidebar._on_mousewheel)
+
             self._tag_text_labels[tag] = lbl
         self.sidebar.tag_canvas.configure(scrollregion=self.sidebar.tag_canvas.bbox("all"))
 
