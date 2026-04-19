@@ -12,6 +12,7 @@ from modules.database import DatabaseManager
 from modules.api import E621Client
 from modules.components.thumbnail_gallery import ThumbnailGallery
 from modules.components.sidebar import Sidebar
+from modules.components.main_image import MainImage
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ class E621DiscoveryApp:
         # Per-post display state
         self.current_post: dict = {}
         self.current_img: Image.Image | None = None
-        self._tk_img = None          # keeps main PhotoImage alive
         self._post_gen = 0           # incremented each time we start loading a new post
 
         # Thread-to-main queues (threads put plain Python data only)
@@ -102,8 +102,8 @@ class E621DiscoveryApp:
         )
         self.thumbnail_gallery.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
 
-        self._img_label = tk.Label(self.root, width=800, height=600)
-        self._img_label.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
+        self.main_image = MainImage(self.root, self._ph_main)
+        self.main_image.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
 
     # ──────────────────────────────────────────────────── helpers
 
@@ -142,7 +142,7 @@ class E621DiscoveryApp:
 
     def _set_loading(self):
         self.sidebar.reset_artist()
-        self._img_label.config(image=self._ph_main, text="")
+        self.main_image.set_loading()
         self.sidebar.reset_tag_list()
         self.thumbnail_gallery.reset()
 
@@ -495,7 +495,7 @@ class E621DiscoveryApp:
 
         prev_post = self.current_post
         self.current_post = clicked
-        self._img_label.config(image=self._ph_main, text="")
+        self.main_image.set_loading()
         self._build_tag_list({})
         gen = self._post_gen
 
@@ -548,8 +548,7 @@ class E621DiscoveryApp:
                 self.sidebar.update_artist(artist)
                 fitted = self._fit_image(pil)
                 tk_img = ImageTk.PhotoImage(fitted)
-                self._img_label.config(image=tk_img, text="")
-                self._tk_img = tk_img
+                self.main_image.set_image(tk_img)
                 self.current_img = pil  # store original (unpadded) for thumbnail swaps
                 self.current_post = post
                 self._build_tag_list(post)
@@ -568,8 +567,7 @@ class E621DiscoveryApp:
                 if pil is not None:
                     fitted = self._fit_image(pil)
                     tk_img = ImageTk.PhotoImage(fitted)
-                    self._img_label.config(image=tk_img, text="")
-                    self._tk_img = tk_img
+                    self.main_image.set_image(tk_img)
                     self.current_img = pil  # store original (unpadded) for thumbnail swaps
                     self._build_tag_list(cp)
                 else:
