@@ -487,6 +487,7 @@ class E621DiscoveryApp:
         if not url:
             return
 
+        self.root.config(cursor="watch")
         self.thumbnail_gallery.disable_clicks()
 
         # Move current main image → thumbnail slot
@@ -573,6 +574,7 @@ class E621DiscoveryApp:
                 else:
                     self.current_post = pp
 
+                self.root.config(cursor="")
                 self.thumbnail_gallery.enable_clicks()
         except queue.Empty:
             pass
