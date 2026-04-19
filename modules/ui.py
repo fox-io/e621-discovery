@@ -13,6 +13,7 @@ from modules.api import E621Client
 from modules.components.thumbnail_gallery import ThumbnailGallery
 from modules.components.sidebar import Sidebar
 from modules.components.main_image import MainImage
+from modules.components.modals import TagsEditorModal, ArtistEditorModal
 
 log = logging.getLogger(__name__)
 
@@ -333,151 +334,25 @@ class E621DiscoveryApp:
         self._invalidate_search()
         self._advance()
 
+    def _on_tags_updated(self):
+        if self.current_post:
+            self._build_tag_list(self.current_post)
+
     def _open_tags_editor(self):
-        editor = tk.Toplevel(self.root)
-        editor.title("Edit Tags")
-        editor.geometry("300x500")
-        editor.transient(self.root)
-        editor.grab_set()
-
-        tk.Label(editor, text="Edit Tags", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
-
-        list_frame = tk.Frame(editor)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        canvas = tk.Canvas(list_frame, highlightthickness=0)
-        sb = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        inner_frame = tk.Frame(canvas)
-        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def _on_modal_mousewheel(event):
-            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-
-        inner_frame.bind("<MouseWheel>", _on_modal_mousewheel)
-        canvas.bind("<MouseWheel>", _on_modal_mousewheel)
-
-        modal_tag_labels = {}
-        changes_made = False
-
-        def _toggle_tag_ban(tag: str):
-            nonlocal changes_made
-            label = modal_tag_labels[tag]
-            if tag in self.banned_tags:
-                # Unban
-                if self.db.remove_banned_tag(tag):
-                    try: self.banned_tags.remove(tag)
-                    except ValueError: pass
-                    label.config(font=self._tag_font, fg=self._tag_default_fg)
-                    changes_made = True
-            else:
-                # Ban
-                if self.db.add_banned_tag(tag):
-                    self.banned_tags.append(tag)
-                    label.config(font=self._tag_strike_font, fg="grey")
-                    changes_made = True
-
-        for tag in sorted(self.banned_tags):
-            row = tk.Frame(inner_frame)
-            row.pack(fill="x", anchor="w")
-
-            ban_icon = tk.Label(row, text="\U0001f6ab", cursor="pointinghand", font=("TkDefaultFont", 7))
-            ban_icon.pack(side="left", padx=(0, 3))
-            ban_icon.bind("<Button-1>", lambda e, t=tag: _toggle_tag_ban(t))
-
-            tag_label = tk.Label(row, text=tag, anchor="w", font=self._tag_strike_font, fg="grey")
-            tag_label.pack(side="left")
-            modal_tag_labels[tag] = tag_label
-
-            for widget in (row, ban_icon, tag_label):
-                widget.bind("<MouseWheel>", _on_modal_mousewheel)
-
-        def _on_close():
-            editor.grab_release()
-            if changes_made:
-                if self.current_post:
-                    self._build_tag_list(self.current_post)
-            editor.destroy()
-
-        tk.Button(editor, text="Close", command=_on_close).pack(pady=10)
-        editor.protocol("WM_DELETE_WINDOW", _on_close)
+        fonts = {
+            "normal": self._tag_font,
+            "strike": self._tag_strike_font,
+            "default_fg": self._tag_default_fg,
+        }
+        TagsEditorModal(self.root, self.db, self.banned_tags, fonts, self._on_tags_updated)
 
     def _open_artist_editor(self):
-        editor = tk.Toplevel(self.root)
-        editor.title("Edit Artists")
-        editor.geometry("300x500")
-        editor.transient(self.root)
-        editor.grab_set()
-
-        tk.Label(editor, text="Edit Artists", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
-
-        list_frame = tk.Frame(editor)
-        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        canvas = tk.Canvas(list_frame, highlightthickness=0)
-        sb = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        inner_frame = tk.Frame(canvas)
-        canvas.create_window((0, 0), window=inner_frame, anchor="nw")
-        inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def _on_modal_mousewheel(event):
-            canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-
-        inner_frame.bind("<MouseWheel>", _on_modal_mousewheel)
-        canvas.bind("<MouseWheel>", _on_modal_mousewheel)
-
-        modal_artist_labels = {}
-
-        def _toggle_artist_status(artist: str):
-            label = modal_artist_labels[artist]
-            is_followed = artist in self.followed_artists
-            is_ignored = artist in self.ignored_artists
-
-            if is_followed:  # Followed -> Ignored
-                if self.db.remove_followed_artist(artist):
-                    try: self.followed_artists.remove(artist)
-                    except ValueError: pass
-                    if self.db.add_ignored_artist(artist):
-                        self.ignored_artists.append(artist)
-                        label.config(font=self._tag_strike_font, fg="grey")
-            elif is_ignored:  # Ignored -> Neither
-                if self.db.remove_ignored_artist(artist):
-                    try: self.ignored_artists.remove(artist)
-                    except ValueError: pass
-                    label.config(font=self._tag_font, fg=self._tag_default_fg)
-            else:  # Neither -> Followed
-                if self.db.add_followed_artist(artist):
-                    self.followed_artists.append(artist)
-                    label.config(font=self._tag_font, fg="green")
-
-        all_artists = sorted(list(set(self.followed_artists) | set(self.ignored_artists)))
-        for artist in all_artists:
-            row = tk.Frame(inner_frame)
-            row.pack(fill="x", anchor="w")
-            toggle_icon = tk.Label(row, text="\u267b", cursor="pointinghand", font=("TkDefaultFont", 9))
-            toggle_icon.pack(side="left", padx=(0, 3))
-            toggle_icon.bind("<Button-1>", lambda e, a=artist: _toggle_artist_status(a))
-
-            font, fg = self._tag_font, self._tag_default_fg
-            if artist in self.ignored_artists: font, fg = self._tag_strike_font, "grey"
-            elif artist in self.followed_artists: fg = "green"
-            artist_label = tk.Label(row, text=artist, anchor="w", font=font, fg=fg)
-            artist_label.pack(side="left")
-            modal_artist_labels[artist] = artist_label
-
-            for widget in (row, toggle_icon, artist_label):
-                widget.bind("<MouseWheel>", _on_modal_mousewheel)
-
-        def _on_close():
-            editor.grab_release()
-            editor.destroy()
-
-        tk.Button(editor, text="Close", command=_on_close).pack(pady=10)
-        editor.protocol("WM_DELETE_WINDOW", _on_close)
+        fonts = {
+            "normal": self._tag_font,
+            "strike": self._tag_strike_font,
+            "default_fg": self._tag_default_fg,
+        }
+        ArtistEditorModal(self.root, self.db, self.followed_artists, self.ignored_artists, fonts)
 
     def _swap_with_thumbnail(self, slot_idx: int):
         clicked = self.thumbnail_gallery.thumb_post_map[slot_idx]
