@@ -55,6 +55,7 @@ class E621DiscoveryApp:
         self._image_q: queue.Queue = queue.Queue()    # (gen, post, PIL|None)
         self._swap_q: queue.Queue = queue.Queue()     # (gen, PIL|None, clicked_post, prev_post)
         self._bg_threads: list = []
+        self._busy_overlay: tk.Toplevel | None = None
 
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
@@ -366,7 +367,19 @@ class E621DiscoveryApp:
         if not url:
             return
 
-        self.root.config(cursor="watch")
+        if self._busy_overlay is None:
+            self._busy_overlay = tk.Toplevel(self.root)
+            self._busy_overlay.overrideredirect(True)
+            # A value of 0.01 is effectively invisible but still allows the window to receive events.
+            self._busy_overlay.attributes("-alpha", 0.01)
+            self._busy_overlay.config(cursor="watch")
+            # Match the main window's position and size
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+            w, h = self.root.winfo_width(), self.root.winfo_height()
+            self._busy_overlay.geometry(f"{w}x{h}+{x}+{y}")
+            self._busy_overlay.lift()
+            self._busy_overlay.grab_set()
+
         self.thumbnail_gallery.disable_clicks()
 
         # Move current main image → thumbnail slot
@@ -453,7 +466,11 @@ class E621DiscoveryApp:
                 else:
                     self.current_post = pp
 
-                self.root.config(cursor="")
+                if self._busy_overlay:
+                    self._busy_overlay.grab_release()
+                    self._busy_overlay.destroy()
+                    self._busy_overlay = None
+
                 self.thumbnail_gallery.enable_clicks()
         except queue.Empty:
             pass

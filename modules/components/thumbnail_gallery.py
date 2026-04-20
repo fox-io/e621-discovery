@@ -73,7 +73,7 @@ class ThumbnailGallery(tk.Frame):
     def disable_clicks(self):
         for lbl in self._thumb_labels:
             lbl.unbind("<Button-1>")
-            lbl.config(cursor="watch")
+            lbl.config(cursor="")
 
     def enable_clicks(self):
         # First, reset cursor on all labels to default
