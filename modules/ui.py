@@ -14,6 +14,7 @@ from modules.components.thumbnail_gallery import ThumbnailGallery
 from modules.components.sidebar import Sidebar
 from modules.components.main_image import MainImage
 from modules.components.modals import TagsEditorModal, ArtistEditorModal
+from modules.engine import DiscoveryEngine
 import modules.image_utils as image_utils
 
 log = logging.getLogger(__name__)
@@ -22,56 +23,27 @@ log = logging.getLogger(__name__)
 class E621DiscoveryApp:
     """Single persistent window that updates in place for each post."""
 
-    NUM_THUMBNAILS = 5
-    IMG_MAX = (800, 600)
-    THUMB_MAX = (100, 100)
-    ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
-
-    def __init__(self, root: tk.Tk, db: DatabaseManager, client: E621Client):
+    def __init__(self, root: tk.Tk, engine: DiscoveryEngine):
         self.root = root
-        self.root.title("e621 Discovery")
-        self.root.geometry("1175x650+0+0")
-        self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(0))
-
-        self.db = db
-        self.client = client
-
-        # Persistent session state
-        self.followed_artists, self.ignored_artists = db.load_artists()
-        self.banned_tags = db.load_banned_tags()
-        self.current_tags = ""
-        self.random_order = True
-        self.page = 1
-        self.post_buffer: list = []
-        self._fetching = False
-        self._fetch_gen = 0  # invalidated on search/random change
-
-        # Per-post display state
-        self.current_post: dict = {}
-        self.current_img: Image.Image | None = None
-        self._post_gen = 0           # incremented each time we start loading a new post
-
-        # Thread-to-main queues (threads put plain Python data only)
-        self._ui_q: queue.Queue = queue.Queue()       # callbacks from batch fetch
-        self._image_q: queue.Queue = queue.Queue()    # (gen, post, PIL|None)
-        self._swap_q: queue.Queue = queue.Queue()     # (gen, PIL|None, clicked_post, prev_post)
-        self._bg_threads: list = []
+        self.engine = engine
         self._is_swapping = False
-        r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
-        self._bg_color = (r >> 8, g >> 8, b >> 8)
-        self._ph_main, self._ph_thumb, self._ph_thumb_none = image_utils.make_placeholders(
-            self._bg_color, self.IMG_MAX, self.THUMB_MAX
-        )
+        self.current_img = None # UI needs to remember the main PIL image for thumbnail scaling
+        
+        # UI Styles
+        self._bg_color = (240, 240, 240) # Adjust to your OS bg color
+        self._ph_main, self._ph_thumb, self._ph_thumb_none = image_utils.make_placeholders(self._bg_color, (800, 600), (100, 100))
         self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
         self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
         _tmp = tk.Label(self.root)
-        self._tag_default_fg: str = _tmp.cget("fg")
+        self._tag_default_fg = _tmp.cget("fg")
         _tmp.destroy()
+
+        # Wire up the engine's callbacks to our UI methods
+        self.engine.on_loading = self._set_loading
+
         self._build_ui()
         self.root.after(50, self._poll)
-        self._advance()  # kick off the first post
-
-    # ──────────────────────────────────────────────────── UI (built once)
+        self.engine.advance() # Kick it off
 
     def _build_ui(self):
         self.root.rowconfigure(0, weight=1)
@@ -79,9 +51,9 @@ class E621DiscoveryApp:
         callbacks = {
             "on_random_toggle": self._on_random_toggle,
             "on_search": self._perform_search,
-            "on_follow": self._follow,
-            "on_ignore": self._ignore,
-            "on_skip": self._skip,
+            "on_follow": self.engine.follow,   # Route directly to engine!
+            "on_ignore": self.engine.ignore,   # Route directly to engine!
+            "on_skip": self.engine.skip,       # Route directly to engine!
             "on_edit_artists": self._open_artist_editor,
             "on_edit_tags": self._open_tags_editor,
             "on_tag_search": self._add_tag_to_search,
@@ -96,33 +68,67 @@ class E621DiscoveryApp:
         self.sidebar = Sidebar(self.root, callbacks, fonts)
         self.sidebar.grid(row=0, column=0, sticky="nsw", padx=10, pady=10)
 
-        def _action_key(event, action):
-            if not isinstance(event.widget, tk.Entry):
-                action()
+        # Keyboard shortcuts mapped straight to engine
+        self.root.bind("<f>", lambda e: self.engine.follow() if not isinstance(e.widget, tk.Entry) else None)
+        self.root.bind("<i>", lambda e: self.engine.ignore() if not isinstance(e.widget, tk.Entry) else None)
+        self.root.bind("<s>", lambda e: self.engine.skip() if not isinstance(e.widget, tk.Entry) else None)
 
-        self.root.bind("<f>", lambda e: _action_key(e, self._follow))
-        self.root.bind("<F>", lambda e: _action_key(e, self._follow))
-        self.root.bind("<i>", lambda e: _action_key(e, self._ignore))
-        self.root.bind("<I>", lambda e: _action_key(e, self._ignore))
-        self.root.bind("<s>", lambda e: _action_key(e, self._skip))
-        self.root.bind("<S>", lambda e: _action_key(e, self._skip))
-
+        # Need the API client for thumbnails
         self.thumbnail_gallery = ThumbnailGallery(
-            self.root, self.client, self._ph_thumb, self._ph_thumb_none,
-            self._swap_with_thumbnail, self._ui_q
+            self.root, self.engine.client, self._ph_thumb, self._ph_thumb_none,
+            self._swap_with_thumbnail, self.engine.ui_q
         )
         self.thumbnail_gallery.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
 
         self.main_image = MainImage(self.root, self._ph_main)
         self.main_image.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
 
-    # ──────────────────────────────────────────────────── helpers
+    # ──────────────────────────────────────────────────── Engine Callbacks & Renders
 
     def _set_loading(self):
         self.sidebar.reset_artist()
         self.main_image.set_loading()
         self.sidebar.reset_tag_list()
         self.thumbnail_gallery.reset()
+
+    def _render_new_post(self, pil_img, post):
+        """Fired when the engine successfully downloads a new image."""
+        self.current_img = pil_img
+        artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
+        
+        self.sidebar.update_artist(artist)
+        
+        fitted = image_utils.fit_image(pil_img, (800, 600), self._bg_color)
+        tk_img = ImageTk.PhotoImage(fitted)
+        self.main_image.set_image(tk_img)
+
+        tags = sorted(t for ts in post.get("tags", {}).values() for t in ts)
+        self.sidebar.render_tags(tags, set(self.engine.banned_tags))
+        
+        self.thumbnail_gallery.start_load(artist, post.get("id"), self.engine.banned_tags)
+
+    def _render_swap(self, pil_img, clicked_post, prev_post):
+        """Fired when the engine finishes downloading a thumbnail swap."""
+        self.current_img = pil_img
+        fitted = image_utils.fit_image(pil_img, (800, 600), self._bg_color)
+        tk_img = ImageTk.PhotoImage(fitted)
+        self.main_image.set_image(tk_img)
+        
+        tags = sorted(t for ts in clicked_post.get("tags", {}).values() for t in ts)
+        self.sidebar.render_tags(tags, set(self.engine.banned_tags))
+        self._end_swap()
+
+    def _render_swap_fail(self, clicked_post, prev_post):
+        """Fired if a thumbnail swap download fails."""
+        self.engine.current_post = prev_post
+        self._end_swap()
+
+    def _end_swap(self):
+        self.root.config(cursor="")
+        self.thumbnail_gallery.enable_clicks()
+        self._is_swapping = False
+
+    # ──────────────────────────────────────────────────── UI Logic
 
     def _add_tag_to_search(self, tag: str):
         existing = self.sidebar.get_search_query().strip().split()
@@ -132,301 +138,89 @@ class E621DiscoveryApp:
         self._perform_search()
 
     def _ban_tag(self, tag: str):
-        if tag in self.banned_tags:
-            # Unban
-            if self.db.remove_banned_tag(tag):
-                self.banned_tags.remove(tag)
+        if tag in self.engine.banned_tags:
+            if self.engine.db.remove_banned_tag(tag):
+                self.engine.banned_tags.remove(tag)
                 self.sidebar.update_tag_style(tag, is_banned=False)
         else:
-            # Ban
-            if self.db.add_banned_tag(tag):
-                self.banned_tags.append(tag)
+            if self.engine.db.add_banned_tag(tag):
+                self.engine.banned_tags.append(tag)
                 self.sidebar.update_tag_style(tag, is_banned=True)
 
-    def _artist(self) -> str:
-        return (self.current_post.get("tags", {}).get("artist") or ["Unknown"])[0]
-
-    # ──────────────────────────────────────────────────── post navigation
-
-    def _invalidate_search(self):
-        """Discard in-flight batch fetches and reset pagination."""
-        self._fetch_gen += 1
-        self._fetching = False
-        self.post_buffer.clear()
-        self.page = 1
-
-    def _download_image(self, url: str, post: dict, gen: int) -> None:
-        """Background thread: download and enqueue a post image."""
-        try:
-            r = self.client.download(url, timeout=30)
-            if r.status_code != 200:
-                self._image_q.put((gen, post, None))
-                return
-            pil = Image.open(BytesIO(r.content))
-            pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
-            self._image_q.put((gen, post, pil))
-        except Exception as ex:
-            log.warning("Image download failed: %s", ex)
-            self._image_q.put((gen, post, None))
-
-    def _advance(self):
-        """Pop the next valid post from the buffer and start loading its image."""
-        while self.post_buffer:
-            post = self.post_buffer.pop(0)
-            artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
-            if artist in self.followed_artists or artist in self.ignored_artists:
-                log.info("Skipping %s — artist '%s' followed/ignored", post.get("id"), artist)
-                continue
-            post_tags = {t for ts in post.get("tags", {}).values() for t in ts}
-            hit = post_tags & set(self.banned_tags)
-            if hit:
-                log.info("Skipping %s — banned: %s", post.get("id"), ", ".join(hit))
-                continue
-            url = post.get("file", {}).get("url")
-            ext = post.get("file", {}).get("ext", "")
-            if not url or ext not in self.ALLOWED_EXTENSIONS:
-                continue
-            # Valid post — start image download
-            self._post_gen += 1
-            gen = self._post_gen
-            self.current_post = post
-            self._set_loading()
-            if len(self.post_buffer) < 5:
-                self._fetch_batch()
-            t = threading.Thread(
-                target=self._download_image, args=(url, post, gen), daemon=True)
-            self._bg_threads.append(t)
-            t.start()
-            return
-        # Buffer empty — fetch a page then retry
-        self._fetch_batch(callback=self._advance)
-
-    def _fetch_batch(self, callback=None):
-        """Fetch a page of posts in a background thread."""
-        if self._fetching:
-            return
-        self._fetching = True
-        fgen = self._fetch_gen
-        tags, page, rand = self.current_tags, self.page, self.random_order
-        self.page += 1
- 
-        def fetch_posts_thread(current_tags, current_page, random_order, fetch_gen, cb):
-            posts = self.client.fetch_posts(tags=current_tags, page=current_page, random_order=random_order)
-            def _on_main():
-                if fetch_gen != self._fetch_gen:
-                    return  # search changed while fetch was in flight
-                self._fetching = False
-                self.post_buffer.extend(posts)
-                if cb:
-                    cb()
-            self._ui_q.put(_on_main)
-
-        t = threading.Thread(
-            target=fetch_posts_thread, args=(tags, page, rand, fgen, callback), daemon=True
-        )
-        self._bg_threads.append(t)
-        t.start()
-
-    # ──────────────────────────────────────────────────── user actions
-
-    def _follow(self):
-        artist = self._artist()
-        if artist not in self.followed_artists:
-            if self.db.add_followed_artist(artist):
-                self.followed_artists.append(artist)
-        log.info("Followed artist '%s'", artist)
-        self._advance()
-
-    def _ignore(self):
-        artist = self._artist()
-        if artist not in self.ignored_artists:
-            if self.db.add_ignored_artist(artist):
-                self.ignored_artists.append(artist)
-        log.info("Ignored artist '%s'", artist)
-        self._advance()
-
-    def _skip(self):
-        log.info("Skipped artist '%s'", self._artist())
-        self._advance()
-
     def _on_random_toggle(self):
-        self.random_order = not self.random_order
-        self._invalidate_search()
-        self._advance()
+        self.engine.random_order = not self.engine.random_order
+        self.engine.invalidate_search()
+        self.engine.advance()
 
     def _perform_search(self):
         query = self.sidebar.get_search_query().strip()
         tags = query.split() if query else []
-        if tags:
-            try:
-                invalid = []
-                for tag in tags:
-                    resp = self.client.api_get(self.client.TAGS_URL,
-                                              params={"search[name]": tag.lstrip("-")})
-                    if resp.status_code == 200:
-                        if not resp.json():
-                            invalid.append(tag)
-                    else:
-                        messagebox.showerror("API Error", f"HTTP {resp.status_code}")
-                        return
-                if invalid:
-                    messagebox.showinfo("Search", f"No tags found: {', '.join(invalid)}")
-                    return
-            except Exception as ex:
-                messagebox.showerror("Error", str(ex))
-                return
-        self.current_tags = " ".join(tags)
-        self._invalidate_search()
-        self._advance()
-
-    def _on_tags_updated(self):
-        if self.current_post:
-            tags = sorted(t for ts in self.current_post.get("tags", {}).values() for t in ts)
-            banned_set = set(self.banned_tags)
-            self.sidebar.render_tags(tags, banned_set)
+        self.engine.current_tags = " ".join(tags)
+        self.engine.invalidate_search()
+        self.engine.advance()
 
     def _open_tags_editor(self):
-        fonts = {
-            "normal": self._tag_font,
-            "strike": self._tag_strike_font,
-            "default_fg": self._tag_default_fg,
-        }
-        TagsEditorModal(self.root, self.db, self.banned_tags, fonts, self._on_tags_updated)
+        fonts = {"normal": self._tag_font, "strike": self._tag_strike_font, "default_fg": self._tag_default_fg}
+        TagsEditorModal(self.root, self.engine.db, self.engine.banned_tags, fonts, self._on_tags_updated)
 
     def _open_artist_editor(self):
-        fonts = {
-            "normal": self._tag_font,
-            "strike": self._tag_strike_font,
-            "default_fg": self._tag_default_fg,
-        }
-        ArtistEditorModal(self.root, self.db, self.followed_artists, self.ignored_artists, fonts)
+        fonts = {"normal": self._tag_font, "strike": self._tag_strike_font, "default_fg": self._tag_default_fg}
+        ArtistEditorModal(self.root, self.engine.db, self.engine.followed_artists, self.engine.ignored_artists, fonts)
+
+    def _on_tags_updated(self):
+        if self.engine.current_post:
+            tags = sorted(t for ts in self.engine.current_post.get("tags", {}).values() for t in ts)
+            self.sidebar.render_tags(tags, set(self.engine.banned_tags))
 
     def _swap_with_thumbnail(self, slot_idx: int):
         clicked = self.thumbnail_gallery.thumb_post_map[slot_idx]
-        if clicked is None or self._is_swapping:
-            return
+        if clicked is None or self._is_swapping: return
         url = clicked.get("file", {}).get("url")
-        if not url:
-            return
+        if not url: return
 
         self._is_swapping = True
         self.root.config(cursor="watch")
         self.root.update_idletasks()
 
-        # Swap the image first.
-        # Move current main image → thumbnail slot
         if self.current_img is not None:
-            self.thumbnail_gallery.update_slot(slot_idx, self.current_img, self.current_post)
+            self.thumbnail_gallery.update_slot(slot_idx, self.current_img, self.engine.current_post)
 
-        # Lock the UI and update the cursor.
         self.thumbnail_gallery.disable_clicks()
-
-        
-
-        prev_post = self.current_post
-        self.current_post = clicked
+        prev_post = self.engine.current_post
         self.main_image.set_loading()
         self.sidebar.render_tags([], set())
-        gen = self._post_gen
-
-        def swap_thread(u, cp, pp, swap_gen):
-            try:
-                r = self.client.download(u, timeout=30)
-                if r.status_code != 200:
-                    self._swap_q.put((swap_gen, None, cp, pp))
-                    return
-                pil = Image.open(BytesIO(r.content))
-                pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
-                self._swap_q.put((swap_gen, pil, cp, pp))
-            except Exception as ex:
-                log.warning("Swap failed: %s", ex)
-                self._swap_q.put((swap_gen, None, cp, pp))
-
-        t = threading.Thread(
-            target=swap_thread, args=(url, clicked, prev_post, gen), daemon=True
-        )
-        self._bg_threads.append(t)
-        t.start()
-
-    def _end_swap(self):
-        """Resets cursor and re-enables clicks after a swap is complete."""
-        self.root.config(cursor="")
-        self.thumbnail_gallery.enable_clicks()
-        self._is_swapping = False
+        
+        # Pass the background download work to the engine
+        self.engine.start_swap(url, clicked, prev_post)
 
     # ──────────────────────────────────────────────────── polling loop
 
     def _poll(self):
-        self._bg_threads = [t for t in self._bg_threads if t.is_alive()]
-
-        # Batch-fetch callbacks (capped to avoid blocking the UI thread)
         try:
             for _ in range(10):
-                cb = self._ui_q.get_nowait()
-                try:
-                    cb()
-                except Exception as ex:
-                    log.warning("UI callback error: %s", ex)
-        except queue.Empty:
-            pass
+                cb = self.engine.ui_q.get_nowait()
+                cb()
+        except queue.Empty: pass
 
-        # Image download results
         try:
             for _ in range(10):
-                g, post, pil = self._image_q.get_nowait()
-                if g != self._post_gen:
-                    continue
-                if pil is None:
-                    log.warning("Image failed; advancing to next post")
-                    self.root.after(300, self._advance)
-                    continue
-                artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
-                self.sidebar.update_artist(artist)
-                fitted = image_utils.fit_image(pil, self.IMG_MAX, self._bg_color)
-                tk_img = ImageTk.PhotoImage(fitted)
-                self.main_image.set_image(tk_img)
-                self.current_img = pil  # store original (unpadded) for thumbnail swaps
-                self.current_post = post
-                tags = sorted(t for ts in post.get("tags", {}).values() for t in ts)
-                banned_set = set(self.banned_tags)
-                self.sidebar.render_tags(tags, banned_set)
-                self.thumbnail_gallery.start_load(artist, post.get("id"), self.banned_tags)
-        except queue.Empty:
-            pass
+                g, post, pil = self.engine.image_q.get_nowait()
+                if g == self.engine.post_gen:
+                    if pil:
+                        self._render_new_post(pil, post)
+                    else:
+                        self.engine.advance()
+        except queue.Empty: pass
+
+        try:
+            for _ in range(10):
+                g, pil, cp, pp = self.engine.swap_q.get_nowait()
+                if g == self.engine.post_gen:
+                    if pil:
+                        self._render_swap(pil, cp, pp)
+                    else:
+                        self._render_swap_fail(cp, pp)
+        except queue.Empty: pass
 
         self.thumbnail_gallery.process_queue_events()
-
-        # Swap results
-        try:
-            for _ in range(10):
-                swap_gen, pil, cp, pp = self._swap_q.get_nowait()
-                if swap_gen != self._post_gen:
-                    continue
-                if pil is not None:
-                    fitted = image_utils.fit_image(pil, self.IMG_MAX, self._bg_color)
-                    tk_img = ImageTk.PhotoImage(fitted)
-                    self.main_image.set_image(tk_img)
-                    self.current_img = pil  # store original (unpadded) for thumbnail swaps
-                    tags = sorted(t for ts in cp.get("tags", {}).values() for t in ts)
-                    banned_set = set(self.banned_tags)
-                    self.sidebar.render_tags(tags, banned_set)
-                    # Defer cleanup to the next event loop cycle.
-                    self.root.after(1, self._end_swap)
-                else:
-                    # Swap failed. Revert to the previous post and image.
-                    self.current_post = pp
-                    tags = sorted(t for ts in self.current_post.get("tags", {}).values() for t in ts)
-                    banned_set = set(self.banned_tags)
-                    self.sidebar.render_tags(tags, banned_set)
-                    if self.current_img:
-                        # Restore the previous image that is still held in self.current_img.
-                        fitted = image_utils.fit_image(self.current_img, self.IMG_MAX, self._bg_color)
-                        tk_img = ImageTk.PhotoImage(fitted)
-                        self.main_image.set_image(tk_img)
-
-                    # Defer cleanup to the next event loop cycle.
-                    self.root.after(1, self._end_swap)
-        except queue.Empty:
-            pass
-
         self.root.after(50, self._poll)
