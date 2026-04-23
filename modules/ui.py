@@ -6,7 +6,7 @@ from io import BytesIO
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import messagebox
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageTk
 
 from modules.database import DatabaseManager
 from modules.api import E621Client
@@ -14,6 +14,7 @@ from modules.components.thumbnail_gallery import ThumbnailGallery
 from modules.components.sidebar import Sidebar
 from modules.components.main_image import MainImage
 from modules.components.modals import TagsEditorModal, ArtistEditorModal
+import modules.image_utils as image_utils
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ class E621DiscoveryApp:
         self._is_swapping = False
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
-        self._ph_main, self._ph_thumb, self._ph_thumb_none = self._make_placeholders()
+        self._ph_main, self._ph_thumb, self._ph_thumb_none = image_utils.make_placeholders(
+            self._bg_color, self.IMG_MAX, self.THUMB_MAX
+        )
         self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
         self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
         _tmp = tk.Label(self.root)
@@ -114,39 +117,6 @@ class E621DiscoveryApp:
         self.main_image.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
 
     # ──────────────────────────────────────────────────── helpers
-
-    def _fit_image(self, pil: Image.Image) -> Image.Image:
-        """Scale pil to fit within IMG_MAX maintaining aspect ratio, centered on bg canvas."""
-        pil = pil.copy()
-        pil.thumbnail(self.IMG_MAX, Image.Resampling.LANCZOS)
-        canvas = Image.new("RGB", self.IMG_MAX, self._bg_color)
-        canvas.paste(pil, ((self.IMG_MAX[0] - pil.width) // 2,
-                           (self.IMG_MAX[1] - pil.height) // 2))
-        return canvas
-
-    def _make_placeholders(self):
-        """Create and return (main_placeholder, thumb_placeholder) as PhotoImages."""
-        bg = self._bg_color
-        border = (150, 150, 150)
-        text_color = (80, 80, 80)
-        # 800x600 main placeholder with centred "Loading..." text and 1px border
-        main = Image.new("RGB", (800, 600), bg)
-        d = ImageDraw.Draw(main)
-        d.rectangle([0, 0, 799, 599], outline=border)
-        text = "Loading..."
-        bb = d.textbbox((0, 0), text)
-        d.text(((800 - (bb[2] - bb[0])) // 2, (600 - (bb[3] - bb[1])) // 2),
-               text, fill=text_color)
-        # 100x100 thumbnail placeholder — "Loading..."
-        def _thumb_img(label_text):
-            img = Image.new("RGB", (100, 100), bg)
-            d2 = ImageDraw.Draw(img)
-            d2.rectangle([0, 0, 99, 99], outline=border)
-            bb2 = d2.textbbox((0, 0), label_text)
-            d2.text(((100 - (bb2[2] - bb2[0])) // 2, (100 - (bb2[3] - bb2[1])) // 2),
-                    label_text, fill=text_color)
-            return ImageTk.PhotoImage(img)
-        return ImageTk.PhotoImage(main), _thumb_img("Loading..."), _thumb_img("None")
 
     def _set_loading(self):
         self.sidebar.reset_artist()
@@ -412,7 +382,7 @@ class E621DiscoveryApp:
                     continue
                 artist = (post.get("tags", {}).get("artist") or ["Unknown"])[0]
                 self.sidebar.update_artist(artist)
-                fitted = self._fit_image(pil)
+                fitted = image_utils.fit_image(pil, self.IMG_MAX, self._bg_color)
                 tk_img = ImageTk.PhotoImage(fitted)
                 self.main_image.set_image(tk_img)
                 self.current_img = pil  # store original (unpadded) for thumbnail swaps
@@ -433,7 +403,7 @@ class E621DiscoveryApp:
                 if swap_gen != self._post_gen:
                     continue
                 if pil is not None:
-                    fitted = self._fit_image(pil)
+                    fitted = image_utils.fit_image(pil, self.IMG_MAX, self._bg_color)
                     tk_img = ImageTk.PhotoImage(fitted)
                     self.main_image.set_image(tk_img)
                     self.current_img = pil  # store original (unpadded) for thumbnail swaps
@@ -450,7 +420,7 @@ class E621DiscoveryApp:
                     self.sidebar.render_tags(tags, banned_set)
                     if self.current_img:
                         # Restore the previous image that is still held in self.current_img.
-                        fitted = self._fit_image(self.current_img)
+                        fitted = image_utils.fit_image(self.current_img, self.IMG_MAX, self._bg_color)
                         tk_img = ImageTk.PhotoImage(fitted)
                         self.main_image.set_image(tk_img)
 
