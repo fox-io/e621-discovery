@@ -5,18 +5,24 @@ import tkinter as tk
 class Sidebar(tk.Frame):
     """A widget to display the main controls and tag list for the application."""
 
-    def __init__(self, master, callbacks: dict):
+    def __init__(self, master, callbacks: dict, fonts: dict):
         """
         Initializes the Sidebar frame.
 
         Args:
             master: The parent tkinter widget.
             callbacks (dict): A dictionary of callbacks for button commands.
-                Expected keys: "on_random_toggle", "on_search", "on_follow",
-                "on_ignore", "on_skip", "on_edit_artists", "on_edit_tags".
+                Expected keys:
+                    "on_random_toggle", "on_search", "on_follow", "on_ignore",
+                    "on_skip", "on_edit_artists", "on_edit_tags",
+                    "on_tag_search", "on_tag_ban".
+            fonts (dict): A dictionary of fonts for tag rendering.
+                Expected keys: "normal", "strike", "default_fg".
         """
         super().__init__(master)
         self.callbacks = callbacks
+        self.fonts = fonts
+        self._tag_text_labels: dict = {}
         self._build_ui()
 
     def _build_ui(self):
@@ -81,10 +87,46 @@ class Sidebar(tk.Frame):
     def reset_artist(self):
         self.artist_label.config(text="Artist: \u2014")
 
-    def get_tag_list_parent(self) -> tk.Frame:
-        return self.tag_inner
-
     def reset_tag_list(self):
         for w in self.tag_inner.winfo_children():
             w.destroy()
         self.tag_canvas.yview_moveto(0)
+
+    def render_tags(self, all_tags: list, banned_set: set):
+        self.reset_tag_list()
+        self._tag_text_labels = {}
+        tags = sorted(all_tags)
+
+        for tag in tags:
+            row = tk.Frame(self.tag_inner)
+            row.pack(fill="x", anchor="w", pady=0, ipady=0)
+            search_lbl = tk.Label(row, text="\U0001f50d", cursor="pointinghand",
+                                   font=("TkDefaultFont", 7), pady=0)
+            search_lbl.pack(side="left", padx=(0, 1), pady=0)
+            search_lbl.bind("<Button-1>", lambda e, t=tag: self.callbacks["on_tag_search"](t))
+
+            ban_lbl = tk.Label(row, text="\U0001f6ab", cursor="pointinghand",
+                               font=("TkDefaultFont", 7), pady=0)
+            ban_lbl.pack(side="left", padx=(0, 3), pady=0)
+            ban_lbl.bind("<Button-1>", lambda e, t=tag: self.callbacks["on_tag_ban"](t))
+
+            is_banned = tag in banned_set
+            lbl = tk.Label(row, text=tag, anchor="w", pady=0,
+                           font=self.fonts["strike"] if is_banned else self.fonts["normal"])
+            if is_banned:
+                lbl.config(fg="grey")
+            lbl.pack(side="left", pady=0)
+
+            for widget in (row, search_lbl, ban_lbl, lbl):
+                widget.bind("<MouseWheel>", self._on_mousewheel)
+
+            self._tag_text_labels[tag] = lbl
+        self.tag_canvas.configure(scrollregion=self.tag_canvas.bbox("all"))
+
+    def update_tag_style(self, tag: str, is_banned: bool):
+        lbl = self._tag_text_labels.get(tag)
+        if lbl:
+            if is_banned:
+                lbl.config(font=self.fonts["strike"], fg="grey")
+            else:
+                lbl.config(font=self.fonts["normal"], fg=self.fonts["default_fg"])

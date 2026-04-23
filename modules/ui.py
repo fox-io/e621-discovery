@@ -59,13 +59,12 @@ class E621DiscoveryApp:
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
         self._ph_main, self._ph_thumb, self._ph_thumb_none = self._make_placeholders()
-        self._build_ui()
         self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
         self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
         _tmp = tk.Label(self.root)
         self._tag_default_fg: str = _tmp.cget("fg")
         _tmp.destroy()
-        self._tag_text_labels: dict = {}
+        self._build_ui()
         self.root.after(50, self._poll)
         self._advance()  # kick off the first post
 
@@ -82,8 +81,16 @@ class E621DiscoveryApp:
             "on_skip": self._skip,
             "on_edit_artists": self._open_artist_editor,
             "on_edit_tags": self._open_tags_editor,
+            "on_tag_search": self._add_tag_to_search,
+            "on_tag_ban": self._ban_tag,
         }
-        self.sidebar = Sidebar(self.root, callbacks)
+        fonts = {
+            "normal": self._tag_font,
+            "strike": self._tag_strike_font,
+            "default_fg": self._tag_default_fg,
+        }
+
+        self.sidebar = Sidebar(self.root, callbacks, fonts)
         self.sidebar.grid(row=0, column=0, sticky="nsw", padx=10, pady=10)
 
         def _action_key(event, action):
@@ -147,39 +154,6 @@ class E621DiscoveryApp:
         self.sidebar.reset_tag_list()
         self.thumbnail_gallery.reset()
 
-    def _build_tag_list(self, post_data: dict):
-        self._tag_text_labels = {}
-        self.sidebar.reset_tag_list()
-        tag_inner = self.sidebar.get_tag_list_parent()
-        tags = sorted(t for ts in post_data.get("tags", {}).values() for t in ts)
-        banned_set = set(self.banned_tags)
-        for tag in tags:
-            row = tk.Frame(tag_inner)
-            row.pack(fill="x", anchor="w", pady=0, ipady=0)
-            search_lbl = tk.Label(row, text="\U0001f50d", cursor="pointinghand",
-                                   font=("TkDefaultFont", 7), pady=0)
-            search_lbl.pack(side="left", padx=(0, 1), pady=0)
-            search_lbl.bind("<Button-1>", lambda e, t=tag: self._add_tag_to_search(t))
-
-            ban_lbl = tk.Label(row, text="\U0001f6ab", cursor="pointinghand",
-                               font=("TkDefaultFont", 7), pady=0)
-            ban_lbl.pack(side="left", padx=(0, 3), pady=0)
-            ban_lbl.bind("<Button-1>", lambda e, t=tag: self._ban_tag(t))
-
-            is_banned = tag in banned_set
-            lbl = tk.Label(row, text=tag, anchor="w", pady=0,
-                           font=self._tag_strike_font if is_banned else self._tag_font)
-            if is_banned:
-                lbl.config(fg="grey")
-            lbl.pack(side="left", pady=0)
-
-            # Bind mousewheel to all child widgets to ensure scrolling works
-            for widget in (row, search_lbl, ban_lbl, lbl):
-                widget.bind("<MouseWheel>", self.sidebar._on_mousewheel)
-
-            self._tag_text_labels[tag] = lbl
-        self.sidebar.tag_canvas.configure(scrollregion=self.sidebar.tag_canvas.bbox("all"))
-
     def _add_tag_to_search(self, tag: str):
         existing = self.sidebar.get_search_query().strip().split()
         if tag not in existing:
@@ -188,19 +162,16 @@ class E621DiscoveryApp:
         self._perform_search()
 
     def _ban_tag(self, tag: str):
-        lbl = self._tag_text_labels.get(tag)
         if tag in self.banned_tags:
             # Unban
             if self.db.remove_banned_tag(tag):
                 self.banned_tags.remove(tag)
-                if lbl:
-                    lbl.config(font=self._tag_font, fg=self._tag_default_fg)
+                self.sidebar.update_tag_style(tag, is_banned=False)
         else:
             # Ban
             if self.db.add_banned_tag(tag):
                 self.banned_tags.append(tag)
-                if lbl:
-                    lbl.config(font=self._tag_strike_font, fg="grey")
+                self.sidebar.update_tag_style(tag, is_banned=True)
 
     def _artist(self) -> str:
         return (self.current_post.get("tags", {}).get("artist") or ["Unknown"])[0]
@@ -340,7 +311,9 @@ class E621DiscoveryApp:
 
     def _on_tags_updated(self):
         if self.current_post:
-            self._build_tag_list(self.current_post)
+            tags = sorted(t for ts in self.current_post.get("tags", {}).values() for t in ts)
+            banned_set = set(self.banned_tags)
+            self.sidebar.render_tags(tags, banned_set)
 
     def _open_tags_editor(self):
         fonts = {
@@ -383,7 +356,7 @@ class E621DiscoveryApp:
         prev_post = self.current_post
         self.current_post = clicked
         self.main_image.set_loading()
-        self._build_tag_list({})
+        self.sidebar.render_tags([], set())
         gen = self._post_gen
 
         def swap_thread(u, cp, pp, swap_gen):
@@ -444,7 +417,9 @@ class E621DiscoveryApp:
                 self.main_image.set_image(tk_img)
                 self.current_img = pil  # store original (unpadded) for thumbnail swaps
                 self.current_post = post
-                self._build_tag_list(post)
+                tags = sorted(t for ts in post.get("tags", {}).values() for t in ts)
+                banned_set = set(self.banned_tags)
+                self.sidebar.render_tags(tags, banned_set)
                 self.thumbnail_gallery.start_load(artist, post.get("id"), self.banned_tags)
         except queue.Empty:
             pass
@@ -462,13 +437,17 @@ class E621DiscoveryApp:
                     tk_img = ImageTk.PhotoImage(fitted)
                     self.main_image.set_image(tk_img)
                     self.current_img = pil  # store original (unpadded) for thumbnail swaps
-                    self._build_tag_list(cp)
+                    tags = sorted(t for ts in cp.get("tags", {}).values() for t in ts)
+                    banned_set = set(self.banned_tags)
+                    self.sidebar.render_tags(tags, banned_set)
                     # Defer cleanup to the next event loop cycle.
                     self.root.after(1, self._end_swap)
                 else:
                     # Swap failed. Revert to the previous post and image.
                     self.current_post = pp
-                    self._build_tag_list(self.current_post)
+                    tags = sorted(t for ts in self.current_post.get("tags", {}).values() for t in ts)
+                    banned_set = set(self.banned_tags)
+                    self.sidebar.render_tags(tags, banned_set)
                     if self.current_img:
                         # Restore the previous image that is still held in self.current_img.
                         fitted = self._fit_image(self.current_img)
