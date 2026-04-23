@@ -65,15 +65,19 @@ class ThumbnailGallery(tk.Frame):
         thumb = image.copy()
         thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
         tk_thumb = ImageTk.PhotoImage(thumb)
-        self._thumb_labels[slot_idx].config(image=tk_thumb, text="", cursor="pointinghand")
+
+        # ONLY update the visual image and the data map.
+        # Do not touch the cursor or bindings here!
+        self._thumb_labels[slot_idx].config(image=tk_thumb, text="")
         self.thumb_images.append(tk_thumb)
         self.thumb_post_map[slot_idx] = post
-        self._thumb_labels[slot_idx].bind("<Button-1>", lambda e, idx=slot_idx: self._on_thumb_click(idx))
 
     def disable_clicks(self):
         for lbl in self._thumb_labels:
             lbl.unbind("<Button-1>")
-            lbl.config(cursor="")
+            # Explicitly set cursor to "watch" on the labels themselves.
+            # This forces the OS to show the busy cursor.
+            lbl.config(cursor="watch")
 
     def enable_clicks(self):
         # First, reset cursor on all labels to default
@@ -82,10 +86,12 @@ class ThumbnailGallery(tk.Frame):
 
         # Then, set pointing hand and bind for clickable ones
         for i, post in enumerate(self.thumb_post_map):
+            lbl = self._thumb_labels[i]
             if post:
-                lbl = self._thumb_labels[i]
                 lbl.config(cursor="pointinghand")
                 lbl.bind("<Button-1>", lambda e, idx=i: self._on_thumb_click(idx))
+            else:
+                lbl.config(cursor="")
 
     def reset(self):
         """Full reset: clear candidates, page state, slots, and nav buttons."""

@@ -55,8 +55,7 @@ class E621DiscoveryApp:
         self._image_q: queue.Queue = queue.Queue()    # (gen, post, PIL|None)
         self._swap_q: queue.Queue = queue.Queue()     # (gen, PIL|None, clicked_post, prev_post)
         self._bg_threads: list = []
-        self._busy_overlay: tk.Toplevel | None = None
-
+        self._is_swapping = False
         r, g, b = self.root.winfo_rgb(self.root.cget("bg"))
         self._bg_color = (r >> 8, g >> 8, b >> 8)
         self._ph_main, self._ph_thumb, self._ph_thumb_none = self._make_placeholders()
@@ -361,30 +360,25 @@ class E621DiscoveryApp:
 
     def _swap_with_thumbnail(self, slot_idx: int):
         clicked = self.thumbnail_gallery.thumb_post_map[slot_idx]
-        if clicked is None:
+        if clicked is None or self._is_swapping:
             return
         url = clicked.get("file", {}).get("url")
         if not url:
             return
 
-        if self._busy_overlay is None:
-            self._busy_overlay = tk.Toplevel(self.root)
-            self._busy_overlay.overrideredirect(True)
-            # A value of 0.01 is effectively invisible but still allows the window to receive events.
-            self._busy_overlay.attributes("-alpha", 0.01)
-            self._busy_overlay.config(cursor="watch")
-            # Match the main window's position and size
-            x, y = self.root.winfo_x(), self.root.winfo_y()
-            w, h = self.root.winfo_width(), self.root.winfo_height()
-            self._busy_overlay.geometry(f"{w}x{h}+{x}+{y}")
-            self._busy_overlay.lift()
-            self._busy_overlay.grab_set()
+        self._is_swapping = True
+        self.root.config(cursor="watch")
+        self.root.update_idletasks()
 
-        self.thumbnail_gallery.disable_clicks()
-
+        # Swap the image first.
         # Move current main image → thumbnail slot
         if self.current_img is not None:
             self.thumbnail_gallery.update_slot(slot_idx, self.current_img, self.current_post)
+
+        # Lock the UI and update the cursor.
+        self.thumbnail_gallery.disable_clicks()
+
+        
 
         prev_post = self.current_post
         self.current_post = clicked
@@ -410,6 +404,12 @@ class E621DiscoveryApp:
         )
         self._bg_threads.append(t)
         t.start()
+
+    def _end_swap(self):
+        """Resets cursor and re-enables clicks after a swap is complete."""
+        self.root.config(cursor="")
+        self.thumbnail_gallery.enable_clicks()
+        self._is_swapping = False
 
     # ──────────────────────────────────────────────────── polling loop
 
@@ -463,15 +463,20 @@ class E621DiscoveryApp:
                     self.main_image.set_image(tk_img)
                     self.current_img = pil  # store original (unpadded) for thumbnail swaps
                     self._build_tag_list(cp)
+                    # Defer cleanup to the next event loop cycle.
+                    self.root.after(1, self._end_swap)
                 else:
+                    # Swap failed. Revert to the previous post and image.
                     self.current_post = pp
+                    self._build_tag_list(self.current_post)
+                    if self.current_img:
+                        # Restore the previous image that is still held in self.current_img.
+                        fitted = self._fit_image(self.current_img)
+                        tk_img = ImageTk.PhotoImage(fitted)
+                        self.main_image.set_image(tk_img)
 
-                if self._busy_overlay:
-                    self._busy_overlay.grab_release()
-                    self._busy_overlay.destroy()
-                    self._busy_overlay = None
-
-                self.thumbnail_gallery.enable_clicks()
+                    # Defer cleanup to the next event loop cycle.
+                    self.root.after(1, self._end_swap)
         except queue.Empty:
             pass
 
