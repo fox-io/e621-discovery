@@ -25,14 +25,32 @@ class Sidebar(tk.Frame):
         self._tag_text_labels: dict = {}
         self._build_ui()
 
+    def _is_dark_theme(self) -> bool:
+        """Checks if the root window background is dark."""
+        try:
+            # Get the root widget and its background color
+            root = self.winfo_toplevel()
+            bg_color = root.cget("bg")
+            # Convert color to RGB values
+            r, g, b = root.winfo_rgb(bg_color)
+            # Calculate luminance (values are 0-65535)
+            luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 65535
+            return luminance < 0.5
+        except (tk.TclError, AttributeError):
+            # Fallback for errors during widget inspection
+            return False
+
     def _build_ui(self):
+        border_color = "#4a4a4a" if self._is_dark_theme() else "#dcdcdc"
+
         self._random_cb = tk.Checkbutton(self, text="Random order", command=self.callbacks["on_random_toggle"])
         self._random_cb.select()
         self._random_cb.pack(anchor="w", pady=(0, 5))
 
         sf = tk.Frame(self)
         sf.pack(anchor="w", pady=(0, 10))
-        self.search_entry = tk.Entry(sf, width=15, cursor="xterm")
+        self.search_entry = tk.Entry(sf, width=15, cursor="xterm", relief='flat',
+                                     highlightbackground=border_color, highlightthickness=1)
         self.search_entry.bind("<Return>", lambda e: self.callbacks["on_search"]())
         self.search_entry.pack(side="left", padx=(0, 5))
         tk.Button(sf, text="\U0001f50d", command=self.callbacks["on_search"], cursor="pointinghand").pack(side="left")
@@ -53,10 +71,10 @@ class Sidebar(tk.Frame):
             side="bottom", anchor="w", pady=(0, 2), fill="x")
         tk.Button(self, text="Edit Tags", command=self.callbacks["on_edit_tags"], cursor="pointinghand").pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
-
-        tf = tk.Frame(self)
+        
+        tf = tk.Frame(self, highlightbackground=border_color, highlightthickness=1)
         tf.pack(fill="both", expand=True, pady=(0, 5))
-        self.tag_canvas = tk.Canvas(tf, width=200, highlightthickness=0)
+        self.tag_canvas = tk.Canvas(tf, width=200, highlightthickness=0, borderwidth=0)
         sb = tk.Scrollbar(tf, orient="vertical", command=self.tag_canvas.yview)
         self.tag_canvas.configure(yscrollcommand=sb.set)
         self.tag_canvas.pack(side="left", fill="both", expand=True)

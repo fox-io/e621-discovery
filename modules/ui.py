@@ -27,15 +27,20 @@ class E621DiscoveryApp:
         self.root = root
         self.engine = engine
         self._is_swapping = False
-        self.current_img = None # UI needs to remember the main PIL image for thumbnail scaling
+        self.current_img: Image.Image | None = None # UI needs to remember the main PIL image for thumbnail scaling
         
-        # UI Styles
-        self._bg_color = (240, 240, 240) # Adjust to your OS bg color
-        self._ph_main, self._ph_thumb, self._ph_thumb_none = image_utils.make_placeholders(self._bg_color, (800, 600), (100, 100))
+        # UI Styles & Dynamic Colors
+        self._bg_color: tuple[int, int, int]
         self._tag_font = tkfont.Font(family="TkDefaultFont", size=10)
         self._tag_strike_font = tkfont.Font(family="TkDefaultFont", size=10, overstrike=True)
         _tmp = tk.Label(self.root)
         self._tag_default_fg = _tmp.cget("fg")
+        try:
+            # Get background color dynamically and convert from 16-bit to 8-bit per channel
+            r, g, b = self.root.winfo_rgb(_tmp.cget("bg"))
+            self._bg_color = (r // 256, g // 256, b // 256)
+        except tk.TclError:
+            self._bg_color = (240, 240, 240) # Fallback for headless or odd environments
         _tmp.destroy()
 
         # Wire up the engine's callbacks to our UI methods
@@ -75,12 +80,12 @@ class E621DiscoveryApp:
 
         # Need the API client for thumbnails
         self.thumbnail_gallery = ThumbnailGallery(
-            self.root, self.engine.client, self._ph_thumb, self._ph_thumb_none,
+            self.root, self.engine.client,
             self._swap_with_thumbnail, self.engine.ui_q
         )
         self.thumbnail_gallery.grid(row=0, column=1, sticky="nw", padx=5, pady=10)
 
-        self.main_image = MainImage(self.root, self._ph_main)
+        self.main_image = MainImage(self.root)
         self.main_image.grid(row=0, column=2, sticky="nw", padx=10, pady=10)
 
     # ──────────────────────────────────────────────────── Engine Callbacks & Renders

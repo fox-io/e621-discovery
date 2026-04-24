@@ -4,7 +4,7 @@ import threading
 from io import BytesIO
 import tkinter as tk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 from modules.api import E621Client
 
@@ -18,13 +18,13 @@ class ThumbnailGallery(tk.Frame):
     THUMB_MAX = (100, 100)
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
 
-    def __init__(self, master, client: E621Client, ph_thumb, ph_thumb_none, on_click_callback, ui_queue: queue.Queue):
+    def __init__(self, master, client: E621Client, on_click_callback, ui_queue: queue.Queue):
         super().__init__(master)
         self.client = client
-        self.ph_thumb = ph_thumb
-        self.ph_thumb_none = ph_thumb_none
         self.on_click_callback = on_click_callback
         self.ui_queue = ui_queue
+        self.ph_thumb = self._create_placeholder("...")
+        self.ph_thumb_none = self._create_placeholder("N/A")
 
         # State
         self.banned_tags = set()
@@ -55,6 +55,54 @@ class ThumbnailGallery(tk.Frame):
             lbl = tk.Label(self, width=100, height=100)
             lbl.pack(pady=(0, 4))
             self._thumb_labels.append(lbl)
+
+    def _is_dark_theme(self) -> bool:
+        """Checks if the root window background is dark."""
+        try:
+            root = self.winfo_toplevel()
+            bg_color = root.cget("bg")
+            r, g, b = root.winfo_rgb(bg_color)
+            luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 65535
+            return luminance < 0.5
+        except (tk.TclError, AttributeError):
+            return False
+
+    def _create_placeholder(self, text: str) -> ImageTk.PhotoImage:
+        """Creates a 100x100 placeholder for thumbnails."""
+        width, height = self.THUMB_MAX
+
+        root = self.winfo_toplevel()
+        try:
+            # On some systems, cget("bg") returns a name, not a hex code.
+            # winfo_rgb can resolve this to a tuple of 16-bit values (0-65535),
+            # which we scale down to 8-bit (0-255) for Pillow.
+            r, g, b = root.winfo_rgb(root.cget("bg"))
+            bg_color = (r // 256, g // 256, b // 256)
+        except (tk.TclError, AttributeError):
+            bg_color = (240, 240, 240)  # Fallback color
+
+        if self._is_dark_theme():
+            border_color = "#4a4a4a"
+            text_color = "#cccccc"
+        else:
+            border_color = "#dcdcdc"
+            text_color = "#333333"
+
+        image = Image.new("RGB", (width, height), color=bg_color)
+        draw = ImageDraw.Draw(image)
+
+        draw.rectangle([(0, 0), (width - 1, height - 1)], outline=border_color, width=1)
+        
+        try:
+            font = ImageFont.truetype("tahoma.ttf", 10)
+        except IOError:
+            try:
+                font = ImageFont.truetype("arial.ttf", 10)
+            except IOError:
+                font = ImageFont.load_default()
+
+        draw.text((width / 2, height / 2), text, fill=text_color, anchor="mm", font=font)
+        return ImageTk.PhotoImage(image)
 
     def _on_thumb_click(self, slot_idx: int):
         if self.thumb_post_map[slot_idx]:

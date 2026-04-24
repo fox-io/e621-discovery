@@ -18,13 +18,29 @@ class BaseEditorModal(tk.Toplevel):
         self._build_base_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _is_dark_theme(self) -> bool:
+        """Checks if the root window background is dark."""
+        try:
+            # Get the root widget and its background color
+            root = self.winfo_toplevel()
+            bg_color = root.cget("bg")
+            # Convert color to RGB values
+            r, g, b = root.winfo_rgb(bg_color)
+            # Calculate luminance (values are 0-65535)
+            luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 65535
+            return luminance < 0.5
+        except (tk.TclError, AttributeError):
+            # Fallback for errors during widget inspection
+            return False
+
     def _build_base_ui(self):
         tk.Label(self, text=self.title(), font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
 
-        list_frame = tk.Frame(self)
+        border_color = "#4a4a4a" if self._is_dark_theme() else "#dcdcdc"
+        list_frame = tk.Frame(self, highlightbackground=border_color, highlightthickness=1)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.canvas = tk.Canvas(list_frame, highlightthickness=0)
+        self.canvas = tk.Canvas(list_frame, highlightthickness=0, borderwidth=0)
         sb = tk.Scrollbar(list_frame, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
