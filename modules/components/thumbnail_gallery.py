@@ -44,10 +44,10 @@ class ThumbnailGallery(tk.Frame):
     def _build_ui(self):
         tk.Label(self, text="More by artist").pack(anchor="w", pady=(0, 4))
         nav = tk.Frame(self)
-        nav.pack(anchor="w", pady=(0, 4))
-        self._thumb_prev_btn = tk.Button(nav, text="<<", state="disabled", fg="grey", command=self._prev_thumb_page)
+        nav.pack(anchor="w", pady=(0, 2))
+        self._thumb_prev_btn = tk.Button(nav, text="<<", state="disabled", fg="grey", command=self._prev_thumb_page, cursor="pointinghand")
         self._thumb_prev_btn.pack(side="left", padx=(0, 4))
-        self._thumb_next_btn = tk.Button(nav, text=">>", state="disabled", fg="grey", command=self._next_thumb_page)
+        self._thumb_next_btn = tk.Button(nav, text=">>", state="disabled", fg="grey", command=self._next_thumb_page, cursor="pointinghand")
         self._thumb_next_btn.pack(side="left")
 
         self._thumb_labels: list = []
@@ -200,8 +200,9 @@ class ThumbnailGallery(tk.Frame):
     def _update_thumb_nav(self):
         can_prev = self._thumb_page > 0
         can_next = (self._thumb_page + 1) * self.NUM_THUMBNAILS < len(self._thumb_candidates)
-        for btn, enabled in ((self._thumb_prev_btn, can_prev), (self._thumb_next_btn, can_next)):
-            btn.config(state="normal" if enabled else "disabled", fg="black" if enabled else "grey")
+        for btn, enabled in ((self._thumb_prev_btn, can_prev), (self._thumb_next_btn, can_next)): # type: ignore
+            btn.config(state="normal" if enabled else "disabled", fg="black" if enabled else "grey",
+                       cursor="pointinghand" if enabled else "")
 
     def _prev_thumb_page(self):
         if self._thumb_page > 0:

@@ -32,26 +32,26 @@ class Sidebar(tk.Frame):
 
         sf = tk.Frame(self)
         sf.pack(anchor="w", pady=(0, 10))
-        self.search_entry = tk.Entry(sf, width=15)
+        self.search_entry = tk.Entry(sf, width=15, cursor="xterm")
         self.search_entry.bind("<Return>", lambda e: self.callbacks["on_search"]())
         self.search_entry.pack(side="left", padx=(0, 5))
-        tk.Button(sf, text="\U0001f50d", command=self.callbacks["on_search"]).pack(side="left")
+        tk.Button(sf, text="\U0001f50d", command=self.callbacks["on_search"], cursor="pointinghand").pack(side="left")
 
         self.artist_label = tk.Label(self, text="Artist: \u2014")
         self.artist_label.pack(anchor="w")
 
         af = tk.Frame(self)
         af.pack(anchor="center", pady=2)
-        tk.Button(af, text="\u2764\ufe0f", command=self.callbacks["on_follow"]).pack(side="left", padx=(0, 2))
-        tk.Button(af, text="\U0001f6ab", command=self.callbacks["on_ignore"]).pack(side="left", padx=(0, 2))
-        tk.Button(af, text="\u23ed\ufe0f", command=self.callbacks["on_skip"]).pack(side="left")
+        tk.Button(af, text="\u2764\ufe0f", command=self.callbacks["on_follow"], cursor="pointinghand").pack(side="left", padx=(0, 2))
+        tk.Button(af, text="\U0001f6ab", command=self.callbacks["on_ignore"], cursor="pointinghand").pack(side="left", padx=(0, 0))
+        tk.Button(af, text="\u23ed\ufe0f", command=self.callbacks["on_skip"], cursor="pointinghand").pack(side="left", padx=(2, 0))
 
         tk.Label(self, text="Post Tags").pack(anchor="w", pady=(6, 0))
 
-        tk.Button(self, text="Quit", width=10, command=lambda: sys.exit(0)).pack(side="bottom", anchor="w", pady=2)
-        tk.Button(self, text="Edit Artists", command=self.callbacks["on_edit_artists"]).pack(
+        tk.Button(self, text="Quit", width=10, command=lambda: sys.exit(0), cursor="pointinghand").pack(side="bottom", anchor="w", pady=2)
+        tk.Button(self, text="Edit Artists", command=self.callbacks["on_edit_artists"], cursor="pointinghand").pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
-        tk.Button(self, text="Edit Tags", command=self.callbacks["on_edit_tags"]).pack(
+        tk.Button(self, text="Edit Tags", command=self.callbacks["on_edit_tags"], cursor="pointinghand").pack(
             side="bottom", anchor="w", pady=(0, 2), fill="x")
 
         tf = tk.Frame(self)
