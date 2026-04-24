@@ -33,10 +33,23 @@ def main():
     atexit.register(_shutdown, db, session_start)
     
     root = tk.Tk()
+    root.withdraw()  # Hide window until it's built and sized to prevent jumping
     
     # 2. Pass the Engine into the UI!
     E621DiscoveryApp(root, engine)
     
+    # Set a fixed window size and center it on the screen.
+    width = 1180
+    height = 660
+    x = (root.winfo_screenwidth() // 2) - (width // 2)
+    y = (root.winfo_screenheight() // 2) - (height // 2)
+    root.geometry(f'{width}x{height}+{x}+{y}')
+    
+    # Prevent the user from resizing the window, as the layout is fixed.
+    root.resizable(False, False)
+    
+    root.deiconify()  # Show the window now that it's sized and positioned.
+
     root.mainloop()
 
 
