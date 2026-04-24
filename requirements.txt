@@ -1,3 +1,4 @@
 # Python 3.10+ required (uses X | Y union type hints)
 Pillow
+pydantic
 requests
