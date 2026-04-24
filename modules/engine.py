@@ -69,11 +69,17 @@ class DiscoveryEngine:
         self.page += 1
  
         def fetch_posts_thread(current_tags, current_page, random_order, fetch_gen, cb):
-            posts = self.client.fetch_posts(tags=current_tags, page=current_page, random_order=random_order)
+            try:
+                posts = self.client.fetch_posts(tags=current_tags, page=current_page, random_order=random_order)
+            except Exception as e:
+                log.warning("Connection error while fetching posts: %s", e)
+                posts = []
+
             def _on_main():
                 if fetch_gen != self._fetch_gen: return 
                 self._fetching = False
-                self.post_buffer.extend(posts)
+                if posts:
+                    self.post_buffer.extend(posts)
                 if cb: cb()
             self.ui_q.put(_on_main)
 
