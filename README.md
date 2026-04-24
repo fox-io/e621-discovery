@@ -56,7 +56,7 @@ python main.py
 | ⏭️ / `S` | Skip this post |
 | 🔍 / Enter | Search by tag(s) |
 | 🔍 next to tag | Add tag to search and immediately search |
-|| 🚫 next to tag | Toggle tag ban — banned tags show strikethrough; click again to unban |
+| 🚫 next to tag | Toggle tag ban — banned tags show strikethrough; click again to unban |
 | `<<` / `>>` | Page through the artist's other posts in the thumbnail column |
 | Thumbnail click | Swap thumbnail with the main image |
 | Quit | Exit the application |
