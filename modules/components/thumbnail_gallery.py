@@ -45,9 +45,9 @@ class ThumbnailGallery(tk.Frame):
         tk.Label(self, text="More by artist").pack(anchor="w", pady=(0, 4))
         nav = tk.Frame(self)
         nav.pack(anchor="w", pady=(0, 2))
-        self._thumb_prev_btn = tk.Button(nav, text="<<", state="disabled", fg="grey", command=self._prev_thumb_page, cursor="pointinghand")
+        self._thumb_prev_btn = tk.Button(nav, text="Prev", state="disabled", fg="grey", command=self._prev_thumb_page, cursor="pointinghand")
         self._thumb_prev_btn.pack(side="left", padx=(0, 4))
-        self._thumb_next_btn = tk.Button(nav, text=">>", state="disabled", fg="grey", command=self._next_thumb_page, cursor="pointinghand")
+        self._thumb_next_btn = tk.Button(nav, text="Next", state="disabled", fg="grey", command=self._next_thumb_page, cursor="pointinghand")
         self._thumb_next_btn.pack(side="left")
 
         self._thumb_labels: list = []
