@@ -1,5 +1,6 @@
 import sys
 import tkinter as tk
+from typing import Literal
 
 
 class Sidebar(tk.Frame):
@@ -23,6 +24,12 @@ class Sidebar(tk.Frame):
         self.callbacks = callbacks
         self.fonts = fonts
         self._tag_text_labels: dict = {}
+        self.search_button = None
+        self.follow_button = None
+        self.ignore_button = None
+        self.skip_button = None
+        self.edit_artists_button = None
+        self.edit_tags_button = None
         self._build_ui()
 
     def _is_dark_theme(self) -> bool:
@@ -43,7 +50,7 @@ class Sidebar(tk.Frame):
     def _build_ui(self):
         border_color = "#4a4a4a" if self._is_dark_theme() else "#dcdcdc"
 
-        self._random_cb = tk.Checkbutton(self, text="Random order", command=self.callbacks["on_random_toggle"])
+        self._random_cb = tk.Checkbutton(self, text="Random order", command=self.callbacks["on_random_toggle"], cursor="pointinghand")
         self._random_cb.select()
         self._random_cb.pack(anchor="w", pady=(0, 5))
 
@@ -53,24 +60,28 @@ class Sidebar(tk.Frame):
                                      highlightbackground=border_color, highlightthickness=1)
         self.search_entry.bind("<Return>", lambda e: self.callbacks["on_search"]())
         self.search_entry.pack(side="left", padx=(0, 5))
-        tk.Button(sf, text="\U0001f50d", command=self.callbacks["on_search"], cursor="pointinghand").pack(side="left")
+        self.search_button = tk.Button(sf, text="\U0001f50d", command=self.callbacks["on_search"], cursor="pointinghand")
+        self.search_button.pack(side="left")
 
         self.artist_label = tk.Label(self, text="Artist: \u2014")
         self.artist_label.pack(anchor="w")
 
         af = tk.Frame(self)
         af.pack(anchor="center", pady=2)
-        tk.Button(af, text="\u2764\ufe0f", command=self.callbacks["on_follow"], cursor="pointinghand").pack(side="left", padx=(0, 2))
-        tk.Button(af, text="\U0001f6ab", command=self.callbacks["on_ignore"], cursor="pointinghand").pack(side="left", padx=(0, 0))
-        tk.Button(af, text="\u23ed\ufe0f", command=self.callbacks["on_skip"], cursor="pointinghand").pack(side="left", padx=(2, 0))
+        self.follow_button = tk.Button(af, text="\u2764\ufe0f", command=self.callbacks["on_follow"], cursor="pointinghand")
+        self.follow_button.pack(side="left", padx=(0, 2))
+        self.ignore_button = tk.Button(af, text="\U0001f6ab", command=self.callbacks["on_ignore"], cursor="pointinghand")
+        self.ignore_button.pack(side="left", padx=(0, 0))
+        self.skip_button = tk.Button(af, text="\u23ed\ufe0f", command=self.callbacks["on_skip"], cursor="pointinghand")
+        self.skip_button.pack(side="left", padx=(2, 0))
 
         tk.Label(self, text="Post Tags").pack(anchor="w", pady=(6, 0))
 
         tk.Button(self, text="Quit", width=10, command=lambda: sys.exit(0), cursor="pointinghand").pack(side="bottom", anchor="w", pady=2)
-        tk.Button(self, text="Edit Artists", command=self.callbacks["on_edit_artists"], cursor="pointinghand").pack(
-            side="bottom", anchor="w", pady=(0, 2), fill="x")
-        tk.Button(self, text="Edit Tags", command=self.callbacks["on_edit_tags"], cursor="pointinghand").pack(
-            side="bottom", anchor="w", pady=(0, 2), fill="x")
+        self.edit_artists_button = tk.Button(self, text="Edit Artists", command=self.callbacks["on_edit_artists"], cursor="pointinghand")
+        self.edit_artists_button.pack(side="bottom", anchor="w", pady=(0, 2), fill="x")
+        self.edit_tags_button = tk.Button(self, text="Edit Tags", command=self.callbacks["on_edit_tags"], cursor="pointinghand")
+        self.edit_tags_button.pack(side="bottom", anchor="w", pady=(0, 2), fill="x")
         
         tf = tk.Frame(self, highlightbackground=border_color, highlightthickness=1)
         tf.pack(fill="both", expand=True, pady=(0, 5))
@@ -91,6 +102,28 @@ class Sidebar(tk.Frame):
 
     def _on_mousewheel(self, event):
         self.tag_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def set_controls_state(self, state: Literal["normal", "disabled"]):
+        """Sets the state of all interactive controls, except 'Quit'."""
+        is_disabled = state == "disabled"
+
+        # Widgets with a pointing hand cursor when enabled
+        pointing_widgets = [
+            self._random_cb,
+            self.search_button,
+            self.follow_button,
+            self.ignore_button,
+            self.skip_button,
+            self.edit_artists_button,
+            self.edit_tags_button,
+        ]
+        for widget in pointing_widgets:
+            if widget:
+                widget.config(state=state, cursor="" if is_disabled else "pointinghand")
+
+        # Special case for the search entry
+        if self.search_entry:
+            self.search_entry.config(state=state, cursor="" if is_disabled else "xterm")
 
     def get_search_query(self) -> str:
         return self.search_entry.get()

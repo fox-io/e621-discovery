@@ -91,11 +91,13 @@ class E621DiscoveryApp:
     # ──────────────────────────────────────────────────── Engine Callbacks & Renders
 
     def _set_loading(self):
+        self.root.config(cursor="watch")
         self.sidebar.reset_artist()
         self.main_image.set_loading()
         self.sidebar.reset_tag_list()
         self.thumbnail_gallery.reset()
-
+        self.sidebar.set_controls_state("disabled")
+ 
     def _render_new_post(self, pil_img, post):
         """Fired when the engine successfully downloads a new image."""
         self.current_img = pil_img
@@ -112,6 +114,9 @@ class E621DiscoveryApp:
         
         self.thumbnail_gallery.start_load(artist, post.get("id"), self.engine.banned_tags)
 
+        self.root.config(cursor="")
+        self.sidebar.set_controls_state("normal")
+
     def _render_swap(self, pil_img, clicked_post, prev_post):
         """Fired when the engine finishes downloading a thumbnail swap."""
         self.current_img = pil_img
@@ -121,12 +126,14 @@ class E621DiscoveryApp:
         
         tags = sorted(t for ts in clicked_post.get("tags", {}).values() for t in ts)
         self.sidebar.render_tags(tags, set(self.engine.banned_tags))
+        self.sidebar.set_controls_state("normal")
         self._end_swap()
 
     def _render_swap_fail(self, clicked_post, prev_post):
         """Fired if a thumbnail swap download fails."""
         self.engine.current_post = prev_post
         self._end_swap()
+        self.sidebar.set_controls_state("normal")
 
     def _end_swap(self):
         self.root.config(cursor="")
@@ -191,6 +198,7 @@ class E621DiscoveryApp:
             self.thumbnail_gallery.update_slot(slot_idx, self.current_img, self.engine.current_post)
 
         self.thumbnail_gallery.disable_clicks()
+        self.sidebar.set_controls_state("disabled")
         prev_post = self.engine.current_post
         self.main_image.set_loading()
         self.sidebar.render_tags([], set())
