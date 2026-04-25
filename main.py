@@ -39,7 +39,7 @@ def main():
     E621DiscoveryApp(root, engine)
     
     # Set a fixed window size and center it on the screen.
-    width = 1180
+    width = 1230
     height = 660
     x = (root.winfo_screenwidth() // 2) - (width // 2)
     y = (root.winfo_screenheight() // 2) - (height // 2)
