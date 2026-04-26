@@ -4,15 +4,14 @@ A desktop tool for discovering new artists on [e621.net](https://e621.net). It f
 
 ## Features
 
-- Persistent single window — updates in place as you browse; no per-post window creation
 - Browse posts filtered by one or more space-separated tags (negation with `-tag` supported)
 - **Follow** ❤️, **Ignore** 🚫, or **Skip** ⏭️ each artist
 - Followed and ignored artists are filtered out in future sessions
+- **Reports modal** to view and copy lists of followed, session-followed, and ignored (banned) artists, accessible from the "Edit Artists" window.
 - Toggle tag bans with 🚫 next to any tag — banned tags are shown with strikethrough in the list; posts and thumbnails containing them are skipped
-- Post buffer pre-fetched in the background so the next image loads without waiting for an API call
 - Main image scaled to fit 800×600, letterboxed with the window background colour
 - Scrollable tag list for the current post with per-tag 🔍 (add to search) and 🚫 (toggle ban) controls
-- Up to 25 of the artist's other posts shown as 100×100 thumbnails, loaded asynchronously across up to 5 API pages to fill slots despite banned-tag filtering; paginated with `<<` / `>>` if more than 5 are available
+- Up to 25 of the artist's other posts shown as 100×100 thumbnails, loaded asynchronously across up to 5 API pages to fill slots despite banned-tag filtering; paginated with `Prev` / `Next` if more than 5 are available
 - Thumbnails also filtered against banned tags
 - Clicking a thumbnail swaps it with the main image
 - Random or sequential post ordering
@@ -26,7 +25,7 @@ A desktop tool for discovering new artists on [e621.net](https://e621.net). It f
 ## Setup
 
 ```bash
-git clone https://github.com/youruser/e621-discovery.git
+git clone https://github.com/fox-io/e621-discovery.git
 cd e621-discovery
 python -m venv venv
 source venv/bin/activate
@@ -58,6 +57,8 @@ python main.py
 | 🔍 next to tag | Add tag to search and immediately search |
 | 🚫 next to tag | Toggle tag ban — banned tags show strikethrough; click again to unban |
 | `Prev` / `Next` | Page through the artist's other posts in the thumbnail column |
+| `Edit Artists` | Open a window to manage followed and ignored artists. |
+| `Edit Tags` | Open a window to manage banned tags. |
 | Thumbnail click | Swap thumbnail with the main image |
 | Quit | Exit the application |
 

@@ -177,7 +177,7 @@ class E621DiscoveryApp:
 
     def _open_artist_editor(self):
         fonts = {"normal": self._tag_font, "strike": self._tag_strike_font, "default_fg": self._tag_default_fg}
-        ArtistEditorModal(self.root, self.engine.db, self.engine.followed_artists, self.engine.ignored_artists, fonts)
+        ArtistEditorModal(self.root, self.engine.db, self.engine.followed_artists, self.engine.ignored_artists, fonts, self.engine.session_start)
 
     def _on_tags_updated(self):
         if self.engine.current_post:

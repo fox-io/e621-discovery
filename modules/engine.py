@@ -25,6 +25,7 @@ class DiscoveryEngine:
         self.banned_tags = self.db.load_banned_tags()
         self.current_tags = ""
         self.random_order = True
+        self.session_start = ""
         self.page = 1
         self.post_buffer = []
         

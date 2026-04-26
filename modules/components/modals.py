@@ -5,6 +5,67 @@ from typing import Callable
 from modules.database import DatabaseManager
 
 
+class ReportModal(tk.Toplevel):
+    """A simple modal for multiline text input."""
+
+    def __init__(self, master, followed_artists: list, session_artists: list, ignored_artists: list):
+        super().__init__(master)
+        self.title("Reports")
+        self.geometry("300x300")
+        self.transient(master)
+        self.grab_set()
+        self.followed_artists = followed_artists
+        self.session_artists = session_artists
+        self.ignored_artists = ignored_artists
+
+        tk.Button(self, text="Close", command=self._on_close).pack(side="bottom", pady=10)
+
+        tk.Label(self, text="Reports", font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
+
+        button_frame = tk.Frame(self)
+        button_frame.pack(pady=(0, 5))
+
+        tk.Button(button_frame, text="Followed", command=self._populate_followed_artists).pack(side="left")
+        tk.Button(button_frame, text="Session", command=self._populate_session_artists).pack(side="left", padx=(5, 0))
+        tk.Button(button_frame, text="Banned", command=self._populate_ignored_artists).pack(side="left", padx=(5, 0))
+
+        text_frame = tk.Frame(self, relief="sunken", borderwidth=1)
+        text_frame.pack(padx=10, pady=5, fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side="right", fill="y")
+        self.text_box = tk.Text(text_frame, relief="flat", yscrollcommand=scrollbar.set)
+        self.text_box.pack(side="left", fill="both", expand=True, padx=1, pady=1)
+        scrollbar.config(command=self.text_box.yview)
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _populate_followed_artists(self):
+        """Populates the text box with a sorted list of followed artists."""
+        self.text_box.delete("1.0", tk.END)
+        if self.followed_artists:
+            artist_list = "\n".join(sorted(self.followed_artists))
+            self.text_box.insert("1.0", artist_list)
+
+    def _populate_session_artists(self):
+        """Populates the text box with a sorted list of artists followed this session."""
+        self.text_box.delete("1.0", tk.END)
+        if self.session_artists:
+            artist_list = "\n".join(sorted(self.session_artists))
+            self.text_box.insert("1.0", artist_list)
+
+    def _populate_ignored_artists(self):
+        """Populates the text box with a sorted list of ignored artists."""
+        self.text_box.delete("1.0", tk.END)
+        if self.ignored_artists:
+            artist_list = "\n".join(sorted(self.ignored_artists))
+            self.text_box.insert("1.0", artist_list)
+
+    def _on_close(self):
+        self.grab_release()
+        self.destroy()
+
+
 class BaseEditorModal(tk.Toplevel):
     """Base class for a modal window with a scrollable list."""
 
@@ -36,6 +97,8 @@ class BaseEditorModal(tk.Toplevel):
     def _build_base_ui(self):
         tk.Label(self, text=self.title(), font=tkfont.Font(family="TkDefaultFont", weight="bold")).pack(pady=(5, 10))
 
+        self._add_extra_controls()
+
         border_color = "#4a4a4a" if self._is_dark_theme() else "#dcdcdc"
         list_frame = tk.Frame(self, highlightbackground=border_color, highlightthickness=1)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -57,6 +120,10 @@ class BaseEditorModal(tk.Toplevel):
 
     def _on_mousewheel(self, event):
         self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def _add_extra_controls(self):
+        """Placeholder for subclasses to add widgets between title and list."""
+        pass
 
     def _on_close(self):
         self.grab_release()
@@ -121,15 +188,26 @@ class TagsEditorModal(BaseEditorModal):
 class ArtistEditorModal(BaseEditorModal):
     """A modal window for editing followed and ignored artists."""
 
-    def __init__(self, master, db: DatabaseManager, followed_artists: list, ignored_artists: list, fonts: dict):
+    def __init__(self, master, db: DatabaseManager, followed_artists: list, ignored_artists: list, fonts: dict, session_start: str):
         super().__init__(master, "Edit Artists")
         self.db = db
         self.followed_artists = followed_artists
         self.ignored_artists = ignored_artists
         self.fonts = fonts
+        self.session_start = session_start
         self.modal_artist_labels = {}
 
         self._build_content()
+
+    def _add_extra_controls(self):
+        tk.Button(self, text="Reports", command=self._open_report_modal).pack(pady=(0, 5))
+
+    def _open_report_modal(self):
+        session_artists = []
+        if self.session_start:
+            # The method get_followed_since returns a list of strings (artist names)
+            session_artists = self.db.get_followed_since(self.session_start)
+        ReportModal(self, self.followed_artists, session_artists, self.ignored_artists)
 
     def _build_content(self):
         all_artists = sorted(list(set(self.followed_artists) | set(self.ignored_artists)))

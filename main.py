@@ -29,6 +29,7 @@ def main():
     
     # 1. Initialize the new Engine with the DB and Client
     engine = DiscoveryEngine(db, client)
+    engine.session_start = session_start
     
     atexit.register(_shutdown, db, session_start)
     
