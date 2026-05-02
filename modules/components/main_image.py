@@ -80,6 +80,44 @@ class MainImage(tk.Label):
         self.config(image=self.placeholder, text="")
         self._image = self.placeholder
 
+    def set_no_results(self):
+        """Displays an N/A placeholder when no results are found."""
+        if not hasattr(self, '_no_results_placeholder'):
+            self._no_results_placeholder = self._create_placeholder_with_text("N/A")
+        self.config(image=self._no_results_placeholder, text="")
+        self._image = self._no_results_placeholder
+
+    def _create_placeholder_with_text(self, text: str) -> PhotoImage:
+        width, height = 800, 600
+        root = self.winfo_toplevel()
+        try:
+            r, g, b = root.winfo_rgb(root.cget("bg"))
+            bg_color = (r // 256, g // 256, b // 256)
+        except (tk.TclError, AttributeError):
+            bg_color = (240, 240, 240)
+
+        if self._is_dark_theme():
+            border_color = "#4a4a4a"
+            text_color = "#cccccc"
+        else:
+            border_color = "#dcdcdc"
+            text_color = "#333333"
+
+        image = Image.new("RGB", (width, height), color=bg_color)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([(0, 0), (width - 1, height - 1)], outline=border_color, width=1)
+
+        try:
+            font = ImageFont.truetype("tahoma.ttf", 20)
+        except IOError:
+            try:
+                font = ImageFont.truetype("arial.ttf", 20)
+            except IOError:
+                font = ImageFont.load_default()
+
+        draw.text((width / 2, height / 2), text, fill=text_color, anchor="mm", font=font)
+        return PhotoImage(image)
+
     def set_image(self, image: PhotoImage):
         """Displays the given image."""
         self.config(image=image, text="")

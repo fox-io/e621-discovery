@@ -42,6 +42,7 @@ class DiscoveryEngine:
 
         # Callbacks (Injected by the UI)
         self.on_loading: Optional[Callable[[], None]] = None
+        self.on_no_results: Optional[Callable[[], None]] = None
 
     def invalidate_search(self):
         self._fetch_gen += 1
@@ -77,11 +78,16 @@ class DiscoveryEngine:
                 posts = []
 
             def _on_main():
-                if fetch_gen != self._fetch_gen: return 
+                if fetch_gen != self._fetch_gen: return
                 self._fetching = False
                 if posts:
                     self.post_buffer.extend(posts)
-                if cb: cb()
+                    if cb: cb()
+                elif current_page == 1:
+                    log.info("Search returned no results")
+                    if self.on_no_results: self.on_no_results()
+                else:
+                    log.info("Search exhausted on page %d — no more posts", current_page)
             self.ui_q.put(_on_main)
 
         t = threading.Thread(target=fetch_posts_thread, args=(tags, page, rand, fgen, callback), daemon=True)

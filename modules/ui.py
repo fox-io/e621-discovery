@@ -45,6 +45,7 @@ class E621DiscoveryApp:
 
         # Wire up the engine's callbacks to our UI methods
         self.engine.on_loading = self._set_loading
+        self.engine.on_no_results = self._show_no_results
 
         self._build_ui()
         self.root.after(50, self._poll)
@@ -98,6 +99,11 @@ class E621DiscoveryApp:
         self.thumbnail_gallery.reset()
         self.sidebar.set_controls_state("disabled")
  
+    def _show_no_results(self):
+        self.root.config(cursor="")
+        self.main_image.set_no_results()
+        self.sidebar.set_controls_state("disabled")
+
     def _render_new_post(self, pil_img, post):
         """Fired when the engine successfully downloads a new image."""
         self.current_img = pil_img
