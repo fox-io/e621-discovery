@@ -4,6 +4,8 @@ import threading
 from io import BytesIO
 import tkinter as tk
 
+import requests
+
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 
 from modules.api import E621Client
@@ -16,6 +18,7 @@ class ThumbnailGallery(tk.Frame):
 
     NUM_THUMBNAILS = 5
     THUMB_MAX = (100, 100)
+    THUMB_MAX_RETRIES = 3
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "bmp", "webp"}
 
     def __init__(self, master, client: E621Client, on_click_callback, ui_queue: queue.Queue):
@@ -25,6 +28,7 @@ class ThumbnailGallery(tk.Frame):
         self.ui_queue = ui_queue
         self.ph_thumb = self._create_placeholder("...")
         self.ph_thumb_none = self._create_placeholder("N/A")
+        self.ph_thumb_error = self._create_placeholder("X", text_color_override="#cc0000")
 
         # State
         self.banned_tags = set()
@@ -36,6 +40,7 @@ class ThumbnailGallery(tk.Frame):
         self._thumb_slot_idx: int = 0
         self._thumb_next_candidate_idx: int = 0
 
+        self._thumb_fail_counts: dict = {}
         self._thumb_q: queue.Queue = queue.Queue()
         self._bg_threads: list = []
 
@@ -67,19 +72,16 @@ class ThumbnailGallery(tk.Frame):
         except (tk.TclError, AttributeError):
             return False
 
-    def _create_placeholder(self, text: str) -> ImageTk.PhotoImage:
+    def _create_placeholder(self, text: str, text_color_override: str = None) -> ImageTk.PhotoImage:
         """Creates a 100x100 placeholder for thumbnails."""
         width, height = self.THUMB_MAX
 
         root = self.winfo_toplevel()
         try:
-            # On some systems, cget("bg") returns a name, not a hex code.
-            # winfo_rgb can resolve this to a tuple of 16-bit values (0-65535),
-            # which we scale down to 8-bit (0-255) for Pillow.
             r, g, b = root.winfo_rgb(root.cget("bg"))
             bg_color = (r // 256, g // 256, b // 256)
         except (tk.TclError, AttributeError):
-            bg_color = (240, 240, 240)  # Fallback color
+            bg_color = (240, 240, 240)
 
         if self._is_dark_theme():
             border_color = "#4a4a4a"
@@ -88,11 +90,14 @@ class ThumbnailGallery(tk.Frame):
             border_color = "#dcdcdc"
             text_color = "#333333"
 
+        if text_color_override:
+            text_color = text_color_override
+
         image = Image.new("RGB", (width, height), color=bg_color)
         draw = ImageDraw.Draw(image)
 
         draw.rectangle([(0, 0), (width - 1, height - 1)], outline=border_color, width=1)
-        
+
         try:
             font = ImageFont.truetype("tahoma.ttf", 10)
         except IOError:
@@ -144,6 +149,7 @@ class ThumbnailGallery(tk.Frame):
         self._thumb_page = 0
         self._thumb_load_id += 1
         self._thumb_next_candidate_idx = 0
+        self._thumb_fail_counts = {}
         self._clear_thumb_slots()
         self._update_thumb_nav()
 
@@ -224,18 +230,22 @@ class ThumbnailGallery(tk.Frame):
             for p in posts:
                 preview_url = p.get("preview", {}).get("url")
                 if not preview_url:
-                    self._thumb_q.put((lid, "fail", p, None))
+                    self._thumb_q.put((lid, "fail", p, "no preview URL"))
                     continue
                 try:
                     r = self.client.download(preview_url, timeout=5)
                     if r.status_code != 200:
-                        self._thumb_q.put((lid, "fail", p, None))
+                        self._thumb_q.put((lid, "fail", p, f"HTTP {r.status_code}"))
                         continue
                     thumb = Image.open(BytesIO(r.content))
                     thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
                     self._thumb_q.put((lid, "thumb", p, thumb))
-                except Exception:
-                    self._thumb_q.put((lid, "fail", p, None))
+                except requests.exceptions.Timeout:
+                    self._thumb_q.put((lid, "fail", p, "connection timeout"))
+                except requests.exceptions.ConnectionError:
+                    self._thumb_q.put((lid, "fail", p, "connection error"))
+                except Exception as ex:
+                    self._thumb_q.put((lid, "fail", p, str(ex)))
             self._thumb_q.put((lid, "batch_done", None, None))
 
         t = threading.Thread(target=_thread, daemon=True)
@@ -282,15 +292,24 @@ class ThumbnailGallery(tk.Frame):
                         self._thumb_labels[slot].bind("<Button-1>", lambda e, idx=slot: self._on_thumb_click(idx))
                         self._thumb_slot_idx += 1
                 elif kind == "fail":
-                    _, _, p, _ = item
+                    _, _, p, reason = item
                     if p:
-                        try:
-                            idx = self._thumb_candidates.index(p)
-                            self._thumb_candidates.pop(idx)
-                            self._thumb_candidates.append(p)
-                            if self._thumb_next_candidate_idx > idx:
-                                self._thumb_next_candidate_idx -= 1
-                        except ValueError: pass
+                        post_id = p.get("id")
+                        self._thumb_fail_counts[post_id] = self._thumb_fail_counts.get(post_id, 0) + 1
+                        if self._thumb_fail_counts[post_id] >= self.THUMB_MAX_RETRIES:
+                            log.warning("Thumbnail for post %s failed after %d attempts: %s", post_id, self.THUMB_MAX_RETRIES, reason)
+                            if self._thumb_slot_idx < self.NUM_THUMBNAILS:
+                                slot = self._thumb_slot_idx
+                                self._thumb_labels[slot].config(image=self.ph_thumb_error, text="", cursor="")
+                                self._thumb_slot_idx += 1
+                        else:
+                            try:
+                                idx = self._thumb_candidates.index(p)
+                                self._thumb_candidates.pop(idx)
+                                self._thumb_candidates.append(p)
+                                if self._thumb_next_candidate_idx > idx:
+                                    self._thumb_next_candidate_idx -= 1
+                            except ValueError: pass
                 elif kind == "batch_done":
                     if self._thumb_slot_idx < self.NUM_THUMBNAILS:
                         self._fetch_thumb_batch()
