@@ -128,18 +128,11 @@ class ThumbnailGallery(tk.Frame):
             lbl.config(cursor="watch")
 
     def enable_clicks(self):
-        # First, reset cursor on all labels to default
-        for lbl in self._thumb_labels:
-            lbl.config(cursor="")
-
-        # Then, set pointing hand and bind for clickable ones
         for i, post in enumerate(self.thumb_post_map):
             lbl = self._thumb_labels[i]
             if post:
                 lbl.config(cursor="pointinghand")
                 lbl.bind("<Button-1>", lambda e, idx=i: self._on_thumb_click(idx))
-            else:
-                lbl.config(cursor="")
 
     def reset(self):
         """Full reset: clear candidates, page state, slots, and nav buttons."""
@@ -200,7 +193,7 @@ class ThumbnailGallery(tk.Frame):
         self.thumb_post_map = [None] * self.NUM_THUMBNAILS
         self._thumb_slot_idx = 0
         for lbl in self._thumb_labels:
-            lbl.config(image=self.ph_thumb, text="", cursor="")
+            lbl.config(image=self.ph_thumb, text="", cursor="watch")
             lbl.unbind("<Button-1>")
 
     def _load_thumb_page(self, page: int):
@@ -217,7 +210,7 @@ class ThumbnailGallery(tk.Frame):
 
         if not posts_to_try:
             for i in range(self._thumb_slot_idx, self.NUM_THUMBNAILS):
-                self._thumb_labels[i].config(image=self.ph_thumb_none, text="")
+                self._thumb_labels[i].config(image=self.ph_thumb_none, text="", cursor="")
             return
 
         self._thumb_next_candidate_idx += len(posts_to_try)
