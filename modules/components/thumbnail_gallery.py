@@ -120,6 +120,10 @@ class ThumbnailGallery(tk.Frame):
         self.thumb_images.append(tk_thumb)
         self.thumb_post_map[slot_idx] = post
 
+        candidate_idx = self._thumb_page * self.NUM_THUMBNAILS + slot_idx
+        if 0 <= candidate_idx < len(self._thumb_candidates):
+            self._thumb_candidates[candidate_idx] = post
+
     def disable_clicks(self):
         for lbl in self._thumb_labels:
             lbl.unbind("<Button-1>")
