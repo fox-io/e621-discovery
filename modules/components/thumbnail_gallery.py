@@ -41,6 +41,7 @@ class ThumbnailGallery(tk.Frame):
         self._thumb_next_candidate_idx: int = 0
 
         self._thumb_fail_counts: dict = {}
+        self._thumb_cache: dict = {}  # post_id -> PIL.Image (cleared on artist change)
         self._thumb_q: queue.Queue = queue.Queue()
         self._bg_threads: list = []
 
@@ -150,6 +151,7 @@ class ThumbnailGallery(tk.Frame):
         self._thumb_load_id += 1
         self._thumb_next_candidate_idx = 0
         self._thumb_fail_counts = {}
+        self._thumb_cache = {}
         self._clear_thumb_slots()
         self._update_thumb_nav()
 
@@ -228,6 +230,11 @@ class ThumbnailGallery(tk.Frame):
 
         def _thread(posts=posts_to_try, lid=lid):
             for p in posts:
+                post_id = p.get("id")
+                cached = self._thumb_cache.get(post_id)
+                if cached is not None:
+                    self._thumb_q.put((lid, "thumb", p, cached.copy()))
+                    continue
                 preview_url = p.get("preview", {}).get("url")
                 if not preview_url:
                     self._thumb_q.put((lid, "fail", p, "no preview URL"))
@@ -239,7 +246,8 @@ class ThumbnailGallery(tk.Frame):
                         continue
                     thumb = Image.open(BytesIO(r.content))
                     thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
-                    self._thumb_q.put((lid, "thumb", p, thumb))
+                    self._thumb_cache[post_id] = thumb
+                    self._thumb_q.put((lid, "thumb", p, thumb.copy()))
                 except requests.exceptions.Timeout:
                     self._thumb_q.put((lid, "fail", p, "connection timeout"))
                 except requests.exceptions.ConnectionError:
