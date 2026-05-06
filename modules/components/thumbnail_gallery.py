@@ -2,6 +2,7 @@ import logging
 import queue
 import threading
 from io import BytesIO
+from typing import Optional
 import tkinter as tk
 
 import requests
@@ -44,6 +45,7 @@ class ThumbnailGallery(tk.Frame):
         self._thumb_cache: dict = {}  # post_id -> PIL.Image (cleared on artist change)
         self._thumb_q: queue.Queue = queue.Queue()
         self._bg_threads: list = []
+        self._loading: bool = False
 
         self._build_ui()
 
@@ -51,9 +53,11 @@ class ThumbnailGallery(tk.Frame):
         tk.Label(self, text="More by artist").pack(anchor="w", pady=(0, 4))
         nav = tk.Frame(self)
         nav.pack(anchor="w", pady=(0, 2))
-        self._thumb_prev_btn = tk.Button(nav, text="Prev", state="disabled", fg="grey", command=self._prev_thumb_page, cursor="pointinghand")
+        self._thumb_prev_btn = tk.Label(nav, text="⏪", relief="flat", padx=4, pady=2)
         self._thumb_prev_btn.pack(side="left", padx=(0, 4))
-        self._thumb_next_btn = tk.Button(nav, text="Next", state="disabled", fg="grey", command=self._next_thumb_page, cursor="pointinghand")
+        self._thumb_page_label = tk.Label(nav, text="Pg 00 of 00", font=("Courier", 10))
+        self._thumb_page_label.pack(side="left", padx=(0, 4))
+        self._thumb_next_btn = tk.Label(nav, text="⏩", relief="flat", padx=4, pady=2)
         self._thumb_next_btn.pack(side="left")
 
         self._thumb_labels: list = []
@@ -73,7 +77,7 @@ class ThumbnailGallery(tk.Frame):
         except (tk.TclError, AttributeError):
             return False
 
-    def _create_placeholder(self, text: str, text_color_override: str = None) -> ImageTk.PhotoImage:
+    def _create_placeholder(self, text: str, text_color_override: Optional[str] = None) -> ImageTk.PhotoImage:
         """Creates a 100x100 placeholder for thumbnails."""
         width, height = self.THUMB_MAX
 
@@ -158,6 +162,8 @@ class ThumbnailGallery(tk.Frame):
     def start_load(self, artist: str, exclude_id: int, banned_tags: list):
         """Phase 1: fetch all filtered candidates in background, then kick off page 0."""
         self.reset()
+        self._loading = True
+        self._update_thumb_nav()
         self.banned_tags = set(banned_tags)
         self._thumb_load_id += 1
         load_id = self._thumb_load_id
@@ -190,6 +196,7 @@ class ThumbnailGallery(tk.Frame):
 
             def _on_main():
                 if lid != self._thumb_load_id: return
+                self._loading = False
                 self._thumb_candidates = candidates
                 self._thumb_page = 0
                 self._update_thumb_nav()
@@ -261,11 +268,23 @@ class ThumbnailGallery(tk.Frame):
         t.start()
 
     def _update_thumb_nav(self):
+        total_pages = max(1, -(-len(self._thumb_candidates) // self.NUM_THUMBNAILS))
         can_prev = self._thumb_page > 0
         can_next = (self._thumb_page + 1) * self.NUM_THUMBNAILS < len(self._thumb_candidates)
-        for btn, enabled in ((self._thumb_prev_btn, can_prev), (self._thumb_next_btn, can_next)): # type: ignore
-            btn.config(state="normal" if enabled else "disabled", fg="black" if enabled else "grey",
-                       cursor="pointinghand" if enabled else "")
+        disabled_bg = "#555555" if self._is_dark_theme() else "#cccccc"
+        default_bg = self.cget("bg")
+        for btn, enabled, cmd in ((self._thumb_prev_btn, can_prev, self._prev_thumb_page),
+                                   (self._thumb_next_btn, can_next, self._next_thumb_page)):
+            btn.unbind("<Button-1>")
+            if enabled:
+                btn.config(bg=default_bg, relief="raised", cursor="pointinghand")
+                btn.bind("<Button-1>", lambda e, c=cmd: c())
+            else:
+                btn.config(bg=disabled_bg, relief="flat", cursor="")
+        if self._thumb_candidates:
+            self._thumb_page_label.config(text=f"Pg {self._thumb_page + 1:02d} of {total_pages:02d}")
+        else:
+            self._thumb_page_label.config(text="Pg 00 of 00")
 
     def _prev_thumb_page(self):
         if self._thumb_page > 0:
