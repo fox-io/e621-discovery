@@ -113,11 +113,11 @@ class E621DiscoveryApp:
         
         fitted = image_utils.fit_image(pil_img, (800, 600), self._bg_color)
         tk_img = ImageTk.PhotoImage(fitted)
-        self.main_image.set_image(tk_img)
+        self.main_image.set_image(tk_img, post_id=post.get("id"))
 
         tags = sorted(t for ts in post.get("tags", {}).values() for t in ts)
         self.sidebar.render_tags(tags, set(self.engine.banned_tags))
-        
+
         self.thumbnail_gallery.start_load(artist, post.get("id"), self.engine.banned_tags)
 
         self.root.config(cursor="")
@@ -128,8 +128,8 @@ class E621DiscoveryApp:
         self.current_img = pil_img
         fitted = image_utils.fit_image(pil_img, (800, 600), self._bg_color)
         tk_img = ImageTk.PhotoImage(fitted)
-        self.main_image.set_image(tk_img)
-        
+        self.main_image.set_image(tk_img, post_id=clicked_post.get("id"))
+
         tags = sorted(t for ts in clicked_post.get("tags", {}).values() for t in ts)
         self.sidebar.render_tags(tags, set(self.engine.banned_tags))
         self.sidebar.set_controls_state("normal")

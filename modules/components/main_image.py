@@ -1,4 +1,5 @@
 import tkinter as tk
+import webbrowser
 from PIL.ImageTk import PhotoImage
 from PIL import Image, ImageDraw, ImageFont
 
@@ -12,9 +13,16 @@ class MainImage(tk.Label):
         It is theme-aware and creates its own placeholder.
         """
         super().__init__(master, width=800, height=600)
-        self._image: PhotoImage | None = None  # To keep the image reference
+        self._image: PhotoImage | None = None
+        self._current_post_id: int | None = None
+        self._loaded: bool = False
         self.placeholder = self._create_placeholder()
         self.set_loading()
+
+        self._context_menu = tk.Menu(self, tearoff=0)
+        self._context_menu.add_command(label="Open in browser", command=self._open_in_browser)
+        self.bind("<Button-2>", self._show_context_menu)
+        self.bind("<Button-3>", self._show_context_menu)
 
     def _is_dark_theme(self) -> bool:
         """Checks if the root window background is dark."""
@@ -75,10 +83,19 @@ class MainImage(tk.Label):
 
         return PhotoImage(image)
 
+    def _show_context_menu(self, event):
+        if self._loaded and self._current_post_id is not None:
+            self._context_menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_in_browser(self):
+        if self._current_post_id is not None:
+            webbrowser.open(f"https://e621.net/posts/{self._current_post_id}")
+
     def set_loading(self):
         """Displays the placeholder loading image."""
         self.config(image=self.placeholder, text="")
         self._image = self.placeholder
+        self._loaded = False
 
     def set_no_results(self):
         """Displays an N/A placeholder when no results are found."""
@@ -86,6 +103,7 @@ class MainImage(tk.Label):
             self._no_results_placeholder = self._create_placeholder_with_text("N/A")
         self.config(image=self._no_results_placeholder, text="")
         self._image = self._no_results_placeholder
+        self._loaded = False
 
     def _create_placeholder_with_text(self, text: str) -> PhotoImage:
         width, height = 800, 600
@@ -118,7 +136,10 @@ class MainImage(tk.Label):
         draw.text((width / 2, height / 2), text, fill=text_color, anchor="mm", font=font)
         return PhotoImage(image)
 
-    def set_image(self, image: PhotoImage):
+    def set_image(self, image: PhotoImage, post_id: int | None = None):
         """Displays the given image."""
         self.config(image=image, text="")
         self._image = image
+        self._loaded = True
+        if post_id is not None:
+            self._current_post_id = post_id
