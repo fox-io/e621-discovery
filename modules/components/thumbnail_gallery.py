@@ -277,7 +277,7 @@ class ThumbnailGallery(tk.Frame):
                                    (self._thumb_next_btn, can_next, self._next_thumb_page)):
             btn.unbind("<Button-1>")
             if enabled:
-                btn.config(bg=default_bg, relief="raised", cursor="pointinghand")
+                btn.config(bg=default_bg, relief="groove", cursor="pointinghand", borderwidth=2)
                 btn.bind("<Button-1>", lambda e, c=cmd: c())
             else:
                 btn.config(bg=disabled_bg, relief="flat", cursor="")
