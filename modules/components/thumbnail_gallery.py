@@ -184,6 +184,9 @@ class ThumbnailGallery(tk.Frame):
                     for p in raw:
                         if p.get("id") == eid: continue
                         if p.get("file", {}).get("ext", "") not in self.ALLOWED_EXTENSIONS: continue
+                        if not p.get("preview", {}).get("url") and not p.get("file", {}).get("url"):
+                            log.info("Skipping post %s — no preview or file URL available", p.get("id"))
+                            continue
                         hit = {t for ts in p.get("tags", {}).values() for t in ts} & b
                         if hit:
                             log.info("Skipping more-by-artist post %s — banned: %s", p.get("id"), ", ".join(hit))
@@ -243,17 +246,22 @@ class ThumbnailGallery(tk.Frame):
                     self._thumb_q.put((lid, "thumb", p, cached.copy()))
                     continue
                 preview_url = p.get("preview", {}).get("url")
+                preview_missing = not preview_url
+                if preview_missing:
+                    preview_url = p.get("file", {}).get("url")
                 if not preview_url:
-                    self._thumb_q.put((lid, "fail", p, "no preview URL"))
+                    self._thumb_q.put((lid, "fail", p, "no preview or file URL"))
                     continue
                 try:
-                    r = self.client.download(preview_url, timeout=5)
+                    r = self.client.download(preview_url, timeout=10)
                     if r.status_code != 200:
                         self._thumb_q.put((lid, "fail", p, f"HTTP {r.status_code}"))
                         continue
                     thumb = Image.open(BytesIO(r.content))
                     thumb.thumbnail(self.THUMB_MAX, Image.Resampling.LANCZOS)
                     self._thumb_cache[post_id] = thumb
+                    if preview_missing:
+                        log.info("Post %s had no preview URL; generated thumbnail from full image", post_id)
                     self._thumb_q.put((lid, "thumb", p, thumb.copy()))
                 except requests.exceptions.Timeout:
                     self._thumb_q.put((lid, "fail", p, "connection timeout"))
