@@ -11,9 +11,12 @@ A desktop tool for discovering new artists on [e621.net](https://e621.net). It f
 - Toggle tag bans with 🚫 next to any tag — banned tags are shown with strikethrough in the list; posts and thumbnails containing them are skipped
 - Main image scaled to fit 800×600, letterboxed with the window background colour
 - Scrollable tag list for the current post with per-tag 🔍 (add to search) and 🚫 (toggle ban) controls
-- Up to 25 of the artist's other posts shown as 100×100 thumbnails, loaded asynchronously across up to 5 API pages to fill slots despite banned-tag filtering; paginated with `Prev` / `Next` if more than 5 are available
-- Thumbnails also filtered against banned tags
+- Up to 25 of the artist's other posts shown as 100×100 thumbnails, loaded asynchronously across up to 5 API pages to fill slots despite banned-tag filtering; paginated with ⏪/⏩ buttons showing page numbers (e.g. `Pg 02 of 09`)
+- Thumbnail caching for the currently viewed artist — revisiting a page doesn't re-download
+- Thumbnails filtered against banned tags; posts with no available image URL are automatically skipped
+- Falls back to full-size image when preview URL is missing, generating a thumbnail on the fly
 - Clicking a thumbnail swaps it with the main image
+- Right-click the main image to open the post on e621.net in your default browser
 - Random or sequential post ordering
 - On exit, a clean list of artists followed during the session is printed to the terminal
 
@@ -56,7 +59,8 @@ python main.py
 | 🔍 / Enter | Search by tag(s) |
 | 🔍 next to tag | Add tag to search and immediately search |
 | 🚫 next to tag | Toggle tag ban — banned tags show strikethrough; click again to unban |
-| `Prev` / `Next` | Page through the artist's other posts in the thumbnail column |
+| ⏪ / ⏩ | Page through the artist's other posts in the thumbnail column |
+| Right-click image | Open the current post on e621.net in your default browser |
 | `Edit Artists` | Open a window to manage followed and ignored artists. |
 | `Edit Tags` | Open a window to manage banned tags. |
 | Thumbnail click | Swap thumbnail with the main image |
