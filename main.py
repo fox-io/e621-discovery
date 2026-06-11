@@ -34,6 +34,7 @@ def main():
     atexit.register(_shutdown, db, session_start)
     
     root = tk.Tk()
+    root.title("e621 Discovery")
     root.withdraw()  # Hide window until it's built and sized to prevent jumping
     
     # 2. Pass the Engine into the UI!
